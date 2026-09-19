@@ -219,7 +219,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private var timer: Timer?
     private var selectedPage = 0
     private var usageCells: [[NSTextField]] = []
-    private let dgRateField = NSTextField(), inRateField = NSTextField(), outRateField = NSTextField()
+    private let dgRateField = NSTextField(), inRateField = NSTextField(), outRateField = NSTextField(), creditField = NSTextField()
+    private let cleanupFreeSwitch = PurpleSwitch()
+    private let creditLabel = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
 
     private static let presets: [(String, String, String)] = [
         ("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-flash-lite-latest"),
@@ -487,23 +489,28 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     private static let usagePeriods = ["Today", "This month", "All time"]
-    private static let usageColumns = ["", "Dictations", "Audio", "Speech", "Cleanup tokens", "Cleanup", "Total"]
+    private static let usageColumns = ["", "Dictations", "Audio", "Speech", "Cleanup tokens", "Cleanup", "List price", "You pay"]
 
     private func buildUsage() -> NSView {
         var rows: [[NSView]] = [MainWindow.usageColumns.map { makeLabel($0, size: 11, weight: .semibold, color: .secondaryLabelColor) }]
         usageCells = []
         for p in MainWindow.usagePeriods {
-            let cells = (0..<6).map { i in makeLabel("–", size: 13, weight: i == 5 ? .bold : .regular) }
+            let cells = (0..<7).map { i in makeLabel("–", size: 13, weight: i >= 5 ? .bold : .regular) }
             usageCells.append(cells)
             rows.append([makeLabel(p, size: 13, weight: .medium)] + cells)
         }
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 12; grid.columnSpacing = 22
-        let table = card([sectionTitle("Running cost"), grid,
-                          makeLabel("Speech = Deepgram, billed by audio streamed. Cleanup = your cleanup model, billed by tokens. These are estimates from the rates below, not your provider's invoice. Skipped or failed calls cost nothing here.",
+        let table = card([sectionTitle("Running cost"), grid, creditLabel,
+                          makeLabel("List price is what these dictations would cost at normal rates. You pay is what actually leaves your pocket: speech is covered by your Deepgram credit until it runs out, and cleanup is covered by the free tier while that switch is on. Estimates from the rates below, not an invoice.",
                                     size: 11, color: .secondaryLabelColor, wrap: true)])
+        cleanupFreeSwitch.isOn = Usage.cleanupFree
+        cleanupFreeSwitch.target = self; cleanupFreeSwitch.action = #selector(toggleCleanupFree)
         let rates = card([
-            sectionTitle("Rates (USD)"),
+            sectionTitle("Rates and credits (USD)"),
+            settingRow("Deepgram credit", "Your sign-up credit. Speech costs you nothing until list-price spend passes this.",
+                       field(creditField, placeholder: "200", value: String(Usage.deepgramCredit), width: 90)),
+            settingRow("Cleanup is on a free tier", "Groq has a rate-limited free tier for now. Turn this off if you move to a paid plan.", cleanupFreeSwitch),
             settingRow("Speech, per minute", "Deepgram Nova-3 streaming was about $0.0077/min when I set this up.",
                        field(dgRateField, placeholder: "0.0077", value: String(Usage.deepgramPerMinute), width: 90)),
             settingRow("Cleanup input, per 1M tokens", nil, field(inRateField, placeholder: "0.29", value: String(Usage.llmInPerMillion), width: 90)),
@@ -522,9 +529,13 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         for (i, s) in since.enumerated() {
             let t = Usage.totals(evs, since: s)
             let vals = ["\(t.dictations)", String(format: "%.1f min", t.audioSeconds / 60), usd(t.speechCost),
-                        "\(k(t.promptTokens)) in / \(k(t.completionTokens)) out", usd(t.cleanupCost), usd(t.total)]
+                        "\(k(t.promptTokens)) in / \(k(t.completionTokens)) out", usd(t.cleanupCost), usd(t.total), usd(t.youPay)]
             for (c, v) in vals.enumerated() { usageCells[i][c].stringValue = v }
         }
+        let st = Usage.creditStatus(evs), credit = Usage.deepgramCredit
+        var line = "Deepgram credit: \(usd(max(0, credit - st.used))) left of \(usd(credit)). At your current pace the true cost is about \(usd(st.monthly)) a month"
+        if st.monthly > 0 { line += String(format: ", so the credit lasts roughly %.0f months.", max(0, credit - st.used) / max(0.0001, evs.isEmpty ? 1 : st.monthly)) } else { line += "." }
+        creditLabel.stringValue = line
     }
 
     private func buildSettings() -> NSView {
@@ -623,6 +634,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         if let v = Double(dgRateField.stringValue) { Usage.deepgramPerMinute = v }
         if let v = Double(inRateField.stringValue) { Usage.llmInPerMillion = v }
         if let v = Double(outRateField.stringValue) { Usage.llmOutPerMillion = v }
+        if let v = Double(creditField.stringValue) { Usage.deepgramCredit = v }
         app.refreshAI()
         refresh()
         if selectedPage == 2 { reloadUsage() }
@@ -638,6 +650,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
     }
     @objc private func saveDict() { Config.dictionary = dictView.string }
+    @objc private func toggleCleanupFree() { Usage.cleanupFree = cleanupFreeSwitch.isOn; reloadUsage() }
     @objc private func toggleAI() { app.aiEnabled = aiSwitch.isOn }
     @objc private func toggleLang() { app.autoLanguage = langSwitch.isOn }
     @objc private func toggleLogin() {

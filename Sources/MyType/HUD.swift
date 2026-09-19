@@ -54,6 +54,8 @@ private final class HUDView: NSView {
     private var comet: CGFloat = 0    // comet visibility, eased
     private var spin: CGFloat = 0     // comet angle in degrees; only advances while there is voice
     private var ripple: CGFloat = 0   // integrated ripple clock (never jumps when the voice level changes)
+    private var breath: CGFloat = 0   // integrated breathing phase (radians); faster with louder speech, so the pulse never jerks
+    private var floor: CGFloat = 0.004 // running estimate of the room's background noise
     private var lastTick = CACurrentMediaTime()
     private var timer: Timer?
     private var introStart = Date()
@@ -76,13 +78,17 @@ private final class HUDView: NSView {
 
     func restartIntro() {
         introStart = Date()
-        target = 0; smooth = 0; comet = 0; ripple = 0
+        target = 0; smooth = 0; comet = 0; ripple = 0; breath = 0; floor = 0.004
         lastTick = CACurrentMediaTime()
     }
 
     func push(level v: Float) {
-        // Speech RMS is small; boost and compress so quiet talkers still move the disc.
-        target = max(target, min(1, CGFloat(v) * 14).squareRoot())
+        // Noise gate: track the background level and ignore anything near it, so a quiet room means zero motion.
+        let x = CGFloat(v)
+        if x < floor { floor = x } else { floor = min(0.02, floor + (x - floor) * 0.004) }
+        let gate = max(0.012, floor * 2.5 + 0.004)
+        let act = min(1, max(0, (x - gate) / 0.07)).squareRoot()
+        target = max(target, act)
     }
 
     private func updateTimer() {
@@ -102,12 +108,13 @@ private final class HUDView: NSView {
     private func tick() {
         let now = CACurrentMediaTime()
         let dt = CGFloat(min(0.05, now - lastTick)); lastTick = now
-        target *= exp(-dt / 0.22)
+        target *= exp(-dt / 0.25)
         follow(&smooth, to: target, attack: 0.07, release: 0.20, dt: dt)
         let speaking = mode == .listening
         follow(&comet, to: mode == .working ? 1 : (speaking ? min(1, smooth * 3) : 0), attack: 0.12, release: 0.25, dt: dt)
         spin += (mode == .working ? 300 : 90 + 330 * smooth) * comet * dt
         ripple += dt * (0.35 + 0.9 * smooth)
+        breath += dt * 2 * .pi * (1.4 + 2.6 * smooth) // ~1.4 Hz when soft, ~4 Hz when loud
         needsDisplay = true
     }
 
@@ -128,7 +135,8 @@ private final class HUDView: NSView {
 
         ctx.saveGState()
         ctx.translateBy(x: c.x, y: c.y)
-        let grow = pop * (1 + 0.3 * e)                 // the whole mic swells with your voice
+        // A gentle breathing pulse (at most ~12% bigger) whose depth and speed follow your voice; exactly still when you're quiet.
+        let grow = pop * (1 + e * (0.04 + 0.08 * (0.5 - 0.5 * cos(breath))))
         ctx.scaleBy(x: grow, y: grow)
         ctx.translateBy(x: -c.x, y: -c.y)
 
@@ -137,7 +145,7 @@ private final class HUDView: NSView {
         }
 
         // Ripples exist only while there is voice.
-        if e > 0.02 {
+        if e > 0.03 {
             for k in 0..<3 {
                 let p = (ripple + CGFloat(k) / 3).truncatingRemainder(dividingBy: 1)
                 let ring = circle(r + 2 + p * (6 + 24 * e))
