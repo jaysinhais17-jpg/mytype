@@ -106,8 +106,6 @@ final class DeepgramSession {
 
 /// Fast hosted-LLM cleanup. Same contract as the local Polisher: on any failure the input comes back unchanged.
 final class CloudPolisher {
-    private static var reasoningRejected = false
-
     /// Opens the HTTPS connection early (call when recording starts) so the cleanup request skips the TLS handshake.
     static func warm() {
         guard Cloud.useLLM else { return }
@@ -147,13 +145,12 @@ final class CloudPolisher {
             ["role": "user", "content": "<t>things to buy bullet points milk eggs and sourdough bread</t>"],
             ["role": "assistant", "content": "Things to buy:\n- Milk\n- Eggs\n- Sourdough bread"],
         ]
-        var body: [String: Any] = [
+        let body: [String: Any] = [
             "model": Cloud.llmModel,
             "messages": [["role": "system", "content": system]] + Polisher.shots + listShot + [["role": "user", "content": "<t>\(text)</t>"]],
             "temperature": 0,
             "max_tokens": min(2048, words * 4 + 96),
         ]
-        let google = base.contains("googleapis.com")
         func send(_ body: [String: Any]) async -> (Data, Int)? {
             var req = URLRequest(url: url)
             req.httpMethod = "POST"
@@ -165,15 +162,7 @@ final class CloudPolisher {
             guard let (d, r) = try? await URLSession.shared.data(for: req) else { return nil }
             return (d, (r as? HTTPURLResponse)?.statusCode ?? 0)
         }
-        // Thinking adds a second or more; ask Gemini to skip it, and remember if this model refuses the option.
-        var result: (Data, Int)?
-        if google && !CloudPolisher.reasoningRejected {
-            body["reasoning_effort"] = "none"
-            result = await send(body)
-            if let r = result, r.1 == 400 { CloudPolisher.reasoningRejected = true; result = nil }
-            body["reasoning_effort"] = nil
-        }
-        if result == nil { result = await send(body) }
+        let result = await send(body)
         guard let (data, _) = result,
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let m = (j["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any],

@@ -220,6 +220,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
 
     private static let presets: [(String, String, String)] = [
         ("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-flash-lite-latest"),
+        ("Groq (fastest)", "https://api.groq.com/openai/v1", "llama-3.1-8b-instant"),
         ("DeepSeek", "https://api.deepseek.com", "deepseek-chat"),
         ("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
     ]
