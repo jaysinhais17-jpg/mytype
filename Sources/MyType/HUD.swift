@@ -5,7 +5,7 @@ final class HUD {
     enum Mode { case hidden, listening, working }
 
     private let panel: NSPanel
-    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 128, height: 128))
+    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 240, height: 240))
 
     init() {
         panel = NSPanel(contentRect: view.frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -43,7 +43,7 @@ final class HUD {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
         let f = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2, y: f.minY - 12))
+        panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2, y: f.minY - 45))
     }
 }
 
@@ -87,8 +87,8 @@ private final class HUDView: NSView {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.phase += 0.09
-            self.energy *= 0.93
-            self.smooth += (self.energy - self.smooth) * 0.25
+            self.energy *= 0.89
+            self.smooth += (self.energy - self.smooth) * 0.4
             self.spin += self.mode == .working ? 5 : self.smooth * 9
             self.needsDisplay = true
         }
@@ -111,7 +111,9 @@ private final class HUDView: NSView {
 
         ctx.saveGState()
         ctx.translateBy(x: c.x, y: c.y)
-        ctx.scaleBy(x: pop * (1 + 0.32 * e), y: pop * (1 + 0.32 * e)) // the whole mic swells with your voice
+        // The whole mic nearly doubles with each word and shrinks below its resting size in silence.
+        let grow = pop * (working ? 1 : 0.72 + 1.2 * e)
+        ctx.scaleBy(x: grow, y: grow)
         ctx.translateBy(x: -c.x, y: -c.y)
 
         func circle(_ radius: CGFloat) -> NSBezierPath {
@@ -122,7 +124,7 @@ private final class HUDView: NSView {
         if !working {
             for k in 0..<3 {
                 let p = (phase * (0.12 + 0.2 * e) + CGFloat(k) / 3).truncatingRemainder(dividingBy: 1)
-                let ring = circle(r + 2 + p * (4 + 30 * e))
+                let ring = circle(r + 2 + p * (4 + 26 * e))
                 ring.lineWidth = 1.4 + 1.6 * e
                 bright.withAlphaComponent((1 - p) * (0.06 + 0.7 * e)).setStroke()
                 ring.stroke()

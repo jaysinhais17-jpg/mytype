@@ -24,7 +24,9 @@ enum Config {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    static let defaultDictionary = "OSCE, urology, uroradiology, nephrolithiasis, hydronephrosis, cystoscopy, paediatrics, obstetrics, gynaecology, MyType, Wispr Flow, Typeless, Deepgram, Gemini, Vertex AI, hands-free, push-to-talk"
+    /// Dictations shorter than this skip cloud cleanup; Deepgram's own punctuation is good enough and it saves ~0.4 s.
+    static let cloudCleanupMinWords = 10
+    static let defaultDictionary = "OSCE, urology, uroradiology, nephrolithiasis, hydronephrosis, cystoscopy, paediatrics, obstetrics, gynaecology, MyType, Wispr Flow, Typeless, Deepgram, Groq, Qwen, Claude, Claude Code, Anthropic, ChatGPT, OpenAI, Gemini, Vertex AI, Cursor, GitHub, API, LLM, SwiftUI, TypeScript, JavaScript, prompt, hands-free, push-to-talk"
     static var dictionary: String {
         get { UserDefaults.standard.string(forKey: "dictionary") ?? defaultDictionary }
         set { UserDefaults.standard.set(newValue, forKey: "dictionary") }
