@@ -1,11 +1,11 @@
 import AppKit
 
-/// Small floating pill at the bottom of the screen: live waveform while listening, dots while working.
+/// Small floating mic at the bottom of the screen: ripples that swell with your voice while listening, a spinning ring while working.
 final class HUD {
     enum Mode { case hidden, listening, working }
 
     private let panel: NSPanel
-    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 184, height: 64))
+    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 88, height: 88))
 
     init() {
         panel = NSPanel(contentRect: view.frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -43,13 +43,13 @@ final class HUD {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
         let f = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2, y: f.minY + 28))
+        panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2, y: f.minY + 10))
     }
 }
 
 private final class HUDView: NSView {
     var mode: HUD.Mode = .hidden { didSet { needsDisplay = true; updateTimer() } }
-    private var levels = [CGFloat](repeating: 0, count: 17)
+    private var energy: CGFloat = 0   // smoothed voice level, 0...1
     private var timer: Timer?
     private var phase: CGFloat = 0
     private var introStart = Date()
@@ -58,28 +58,25 @@ private final class HUDView: NSView {
     private let lavender = NSColor(red: 0.86, green: 0.80, blue: 1.0, alpha: 1)
     private lazy var micIcon: NSImage? = {
         guard let base = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 18, weight: .semibold)) else { return nil }
-        let img = NSImage(size: base.size, flipped: false) { rect in
+            .withSymbolConfiguration(.init(pointSize: 17, weight: .semibold)) else { return nil }
+        return NSImage(size: base.size, flipped: false) { [lavender] rect in
             base.draw(in: rect)
-            NSColor.white.set()
+            lavender.set()
             rect.fill(using: .sourceAtop)
             return true
         }
-        return img
     }()
 
     override var isFlipped: Bool { false }
 
     func restartIntro() {
         introStart = Date()
-        levels = [CGFloat](repeating: 0, count: levels.count)
+        energy = 0
     }
 
     func push(level v: Float) {
-        // Speech RMS is small; boost and compress so quiet talkers still move the bars.
-        let x = min(1, CGFloat(v) * 14)
-        levels.removeFirst()
-        levels.append(x.squareRoot())
+        // Speech RMS is small; boost and compress so quiet talkers still move the ripples.
+        energy = max(energy, min(1, CGFloat(v) * 14).squareRoot())
     }
 
     private func updateTimer() {
@@ -88,6 +85,7 @@ private final class HUDView: NSView {
         timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
             guard let self else { return }
             self.phase += 0.09
+            self.energy *= 0.93
             self.needsDisplay = true
         }
         RunLoop.main.add(timer!, forMode: .common)
@@ -97,77 +95,66 @@ private final class HUDView: NSView {
         let c1: CGFloat = 1.70158, c3 = c1 + 1, x = min(max(t, 0), 1) - 1
         return 1 + c3 * x * x * x + c1 * x * x
     }
-    private func easeInOut(_ t: CGFloat) -> CGFloat {
-        let x = min(max(t, 0), 1)
-        return x * x * (3 - 2 * x)
-    }
 
     override func draw(_ dirtyRect: NSRect) {
-        let t = CGFloat(Date().timeIntervalSince(introStart))
-        let pop = easeOutBack(t / 0.28)              // circle springs in
-        let morph = easeInOut((t - 0.30) / 0.35)     // then stretches into the bar pill
-        let h: CGFloat = 40
-        let w = h + (bounds.width - 24 - h) * morph
-        let breathe = mode == .listening ? 1 + 0.02 * sin(phase * 2) : 1
-        let scale = max(0.01, pop) * breathe
-
         guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        let t = CGFloat(Date().timeIntervalSince(introStart))
+        let pop = max(0.01, easeOutBack(t / 0.30))
+        let working = mode == .working
+        let e = working ? 0 : energy
+        let c = CGPoint(x: bounds.midX, y: bounds.midY)
+        let r: CGFloat = 19
+
         ctx.saveGState()
-        ctx.translateBy(x: bounds.midX, y: bounds.midY)
-        ctx.scaleBy(x: scale, y: scale)
-        ctx.translateBy(x: -bounds.midX, y: -bounds.midY)
+        ctx.translateBy(x: c.x, y: c.y)
+        ctx.scaleBy(x: pop, y: pop)
+        ctx.translateBy(x: -c.x, y: -c.y)
 
-        let rect = NSRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
-        let pill = NSBezierPath(roundedRect: rect, xRadius: h / 2, yRadius: h / 2)
-        NSColor(red: 0.03, green: 0.03, blue: 0.05, alpha: 1).setFill()
-        pill.fill()
-
-        // Purple outline that pulses slowly while the pill is on screen.
-        let pulse = 0.5 + 0.5 * sin(phase * 0.9)
-        let lineW: CGFloat = 1.8 + 0.7 * pulse
-        let frame = NSBezierPath(roundedRect: rect.insetBy(dx: lineW / 2, dy: lineW / 2),
-                                 xRadius: (h - lineW) / 2, yRadius: (h - lineW) / 2)
-        frame.lineWidth = lineW
-        ctx.saveGState()
-        ctx.setShadow(offset: .zero, blur: 5 + 9 * pulse, color: bright.withAlphaComponent(0.35 + 0.45 * pulse).cgColor)
-        bright.withAlphaComponent(0.65 + 0.35 * pulse).setStroke()
-        frame.stroke()
-        ctx.restoreGState()
-
-        // Mic icon fades out as the bars take over.
-        let micAlpha = max(0, 1 - morph * 1.6)
-        if micAlpha > 0, let icon = micIcon {
-            let r = NSRect(x: bounds.midX - icon.size.width / 2, y: bounds.midY - icon.size.height / 2,
-                           width: icon.size.width, height: icon.size.height)
-            icon.draw(in: r, from: .zero, operation: .sourceOver, fraction: micAlpha)
+        func circle(_ radius: CGFloat) -> NSBezierPath {
+            NSBezierPath(ovalIn: NSRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2))
         }
 
-        if morph > 0.4 {
-            let fade = min(1, (morph - 0.4) / 0.6)
-            switch mode {
-            case .listening:
-                let n = levels.count, barW: CGFloat = 3, gap: CGFloat = 3.5
-                let total = CGFloat(n) * barW + CGFloat(n - 1) * gap
-                var x = bounds.midX - total / 2
-                for (i, l) in levels.enumerated() {
-                    // Gentle idle shimmer so the bars are alive even in silence.
-                    let idle = 0.10 + 0.06 * sin(phase * 1.5 + CGFloat(i) * 0.7)
-                    let v = max(idle, l)
-                    let bh = max(4, v * (h - 12))
-                    let r = NSRect(x: x, y: bounds.midY - bh / 2, width: barW, height: bh)
-                    lavender.withAlphaComponent((0.6 + 0.4 * v) * fade).setFill()
-                    NSBezierPath(roundedRect: r, xRadius: 1.5, yRadius: 1.5).fill()
-                    x += barW + gap
-                }
-            case .working:
-                for i in 0..<3 {
-                    let a = 0.35 + 0.65 * max(0, sin(phase * 2 - CGFloat(i) * 0.9))
-                    lavender.withAlphaComponent(a * fade).setFill()
-                    let cx = bounds.midX + CGFloat(i - 1) * 14
-                    NSBezierPath(ovalIn: NSRect(x: cx - 3.5, y: bounds.midY - 3.5, width: 7, height: 7)).fill()
-                }
-            case .hidden: break
+        // Ripples drift outward and swell with your voice.
+        if !working {
+            for k in 0..<2 {
+                let p = (phase * 0.16 + CGFloat(k) * 0.5).truncatingRemainder(dividingBy: 1)
+                let ring = circle(r + 3 + p * (10 + 8 * e))
+                ring.lineWidth = 1.6
+                bright.withAlphaComponent((1 - p) * (0.18 + 0.55 * e)).setStroke()
+                ring.stroke()
             }
+        }
+
+        // Body: black disc with a glowing purple outline.
+        let pulse = 0.5 + 0.5 * sin(phase * 0.9)
+        ctx.saveGState()
+        ctx.setShadow(offset: .zero, blur: 6 + 8 * pulse + 10 * e, color: bright.withAlphaComponent(0.4 + 0.3 * pulse + 0.3 * e).cgColor)
+        NSColor(red: 0.03, green: 0.03, blue: 0.05, alpha: 1).setFill()
+        circle(r).fill()
+        ctx.restoreGState()
+        let edge = circle(r - 1)
+        edge.lineWidth = 2
+        bright.withAlphaComponent(0.6 + 0.4 * pulse).setStroke()
+        edge.stroke()
+
+        // A comet of light circling the outline; it spins faster while the text is being prepared.
+        let head = -phase * (working ? 90 : 42)
+        let steps = 16
+        for i in 0..<steps {
+            let a = head + CGFloat(i) * 5
+            let arc = NSBezierPath()
+            arc.appendArc(withCenter: c, radius: r - 1, startAngle: a, endAngle: a + 6.5, clockwise: false)
+            arc.lineWidth = 2.6
+            arc.lineCapStyle = .round
+            lavender.withAlphaComponent(pow(1 - CGFloat(i) / CGFloat(steps), 1.6)).setStroke()
+            arc.stroke()
+        }
+
+        if let icon = micIcon {
+            let k = 1 + 0.14 * e
+            let w = icon.size.width * k, h = icon.size.height * k
+            icon.draw(in: NSRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h),
+                      from: .zero, operation: .sourceOver, fraction: working ? 0.55 : 1)
         }
         ctx.restoreGState()
     }

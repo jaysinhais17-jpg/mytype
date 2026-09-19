@@ -145,7 +145,7 @@ final class CloudPolisher {
             ["role": "user", "content": "<t>things to buy bullet points milk eggs and sourdough bread</t>"],
             ["role": "assistant", "content": "Things to buy:\n- Milk\n- Eggs\n- Sourdough bread"],
         ]
-        let body: [String: Any] = [
+        var body: [String: Any] = [
             "model": Cloud.llmModel,
             "messages": [["role": "system", "content": system]] + Polisher.shots + listShot + [["role": "user", "content": "<t>\(text)</t>"]],
             "temperature": 0,
@@ -161,6 +161,11 @@ final class CloudPolisher {
             req.httpBody = payload
             guard let (d, r) = try? await URLSession.shared.data(for: req) else { return nil }
             return (d, (r as? HTTPURLResponse)?.statusCode ?? 0)
+        }
+        // Reasoning models spend tokens and seconds thinking; turn it right down where the provider allows.
+        if base.contains("groq.com") {
+            if Cloud.llmModel.hasPrefix("qwen/") { body["reasoning_effort"] = "none" }
+            else if Cloud.llmModel.contains("gpt-oss") { body["reasoning_effort"] = "low"; body["max_tokens"] = 400 }
         }
         let result = await send(body)
         guard let (data, _) = result,
