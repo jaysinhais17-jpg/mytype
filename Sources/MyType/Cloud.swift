@@ -107,12 +107,20 @@ final class CloudPolisher {
         let system = Polisher.system
             + " Exception to (5): if a word was clearly misheard and the context makes the intended word obvious "
             + "(for example 'suing' for 'using'), fix it."
+            + " Formatting: only when the speaker clearly enumerates items (says 'bullet points', 'list', 'number one', "
+            + "'first… second… third…') or says 'new line' or 'new paragraph', format that part as a list with one item per line "
+            + "using '- ' bullets (or '1. 2. 3.' when they count), or insert the line break. Keep every item's wording. "
+            + "Otherwise write normal prose and never add lists, headings or markdown on your own."
             + (glossary.isEmpty ? "" : " Correct spellings of terms the speaker uses: \(glossary).")
+        let listShot: [[String: String]] = [
+            ["role": "user", "content": "<t>things to buy bullet points milk eggs and sourdough bread</t>"],
+            ["role": "assistant", "content": "Things to buy:\n- Milk\n- Eggs\n- Sourdough bread"],
+        ]
         let body: [String: Any] = [
             "model": Cloud.llmModel,
-            "messages": [["role": "system", "content": system]] + Polisher.shots + [["role": "user", "content": "<t>\(text)</t>"]],
+            "messages": [["role": "system", "content": system]] + Polisher.shots + listShot + [["role": "user", "content": "<t>\(text)</t>"]],
             "temperature": 0,
-            "max_tokens": min(2048, words * 3 + 64),
+            "max_tokens": min(2048, words * 4 + 96),
         ]
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
