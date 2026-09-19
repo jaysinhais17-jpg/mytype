@@ -61,6 +61,7 @@ private final class HUDView: NSView {
     private var lastTick = CACurrentMediaTime()
     private var timer: Timer?
     private var introStart = Date()
+    private var introTime = CACurrentMediaTime()
 
     private let bright = NSColor(red: 0.55, green: 0.36, blue: 0.98, alpha: 1)
     private let lavender = NSColor(red: 0.86, green: 0.80, blue: 1.0, alpha: 1)
@@ -68,9 +69,9 @@ private final class HUDView: NSView {
     private lazy var micIcon: NSImage? = {
         guard let base = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)?
             .withSymbolConfiguration(.init(pointSize: 17 * iconScale, weight: .semibold)) else { return nil }
-        return NSImage(size: base.size, flipped: false) { [lavender] rect in
+        return NSImage(size: base.size, flipped: false) { rect in
             base.draw(in: rect)
-            lavender.set()
+            NSColor.white.set()
             rect.fill(using: .sourceAtop)
             return true
         }
@@ -81,7 +82,7 @@ private final class HUDView: NSView {
     override var isFlipped: Bool { false }
 
     func restartIntro() {
-        introStart = Date()
+        introStart = Date(); introTime = CACurrentMediaTime()
         target = 0; smooth = 0; comet = 0; ripple = 0; breath = 0; shimmer = 0; floor = 0.004
         lastVoice = CACurrentMediaTime() - 10
         lastTick = CACurrentMediaTime()
@@ -90,6 +91,8 @@ private final class HUDView: NSView {
     func push(level v: Float) {
         // Noise gate: track the background level and ignore anything near it, so a quiet room means zero motion.
         let x = CGFloat(v)
+        // The start-up chime and mic warm-up spike the level: sit still for the first moments and just learn the room's noise.
+        if CACurrentMediaTime() - introTime < 0.7 { floor = min(0.02, max(floor, x * 0.5)); return }
         if x < floor { floor = x } else { floor = min(0.02, floor + (x - floor) * 0.004) }
         let gate = max(0.012, floor * 2.5 + 0.004)
         let act = min(1, max(0, (x - gate) / 0.05)).squareRoot()
