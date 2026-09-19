@@ -193,6 +193,7 @@ final class App: NSObject, NSApplicationDelegate {
         do {
             try recorder.start()
             recording = true
+            CloudPolisher.appStyle = CloudPolisher.style(for: NSWorkspace.shared.frontmostApplication)
             if Cloud.aiReady { CloudPolisher.warm() }
             if Cloud.useDeepgram && Net.online {
                 let d = DeepgramSession(recorder: recorder)

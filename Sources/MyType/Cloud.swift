@@ -1,5 +1,6 @@
 import Foundation
 import Network
+import AppKit
 
 /// Live network state, so with no connection we go straight to the on-device models instead of waiting for cloud timeouts.
 enum Net {
@@ -119,6 +120,21 @@ final class DeepgramSession {
 
 /// Fast hosted-LLM cleanup. Same contract as the local Polisher: on any failure the input comes back unchanged.
 final class CloudPolisher {
+    /// Tone hint for the app you are dictating into, set when recording starts.
+    static var appStyle = ""
+
+    /// Maps the frontmost app to how the text should read there.
+    static func style(for app: NSRunningApplication?) -> String {
+        let id = (app?.bundleIdentifier ?? "").lowercased(), name = app?.localizedName ?? ""
+        let casual = ["slack", "discord", "messages", "whatsapp", "telegram", "signal", "imessage"]
+        let formal = ["mail", "outlook", "spark", "superhuman", "gmail"]
+        let code = ["xcode", "vscode", "cursor", "terminal", "iterm", "warp", "jetbrains", "claude", "sublime", "zed", "ghostty", "windsurf"]
+        if casual.contains(where: id.contains) { return "The text is going into \(name), a chat app: keep it casual and brief, no formal greeting or sign-off." }
+        if formal.contains(where: id.contains) { return "The text is going into \(name), an email app: keep a polished, professional tone with normal capitalisation." }
+        if code.contains(where: id.contains) { return "The text is going into \(name), a developer tool: keep technical terms, file names, commands and code identifiers exactly as spoken, and do not add greetings or pleasantries." }
+        return ""
+    }
+
     /// Opens the HTTPS connection early (call when recording starts) so the cleanup request skips the TLS handshake.
     static func warm() {
         guard Cloud.useLLM else { return }
@@ -153,6 +169,7 @@ final class CloudPolisher {
         Otherwise write ordinary prose with no headings or markdown. \
         Output only the cleaned text.
         """
+            + (CloudPolisher.appStyle.isEmpty ? "" : " " + CloudPolisher.appStyle)
             + (glossary.isEmpty ? "" : " Correct spellings of terms the speaker uses: \(glossary).")
             + (recent.isEmpty ? "" : "\nFor context only (never repeat it), the speaker's previous dictations:\n\(recent)")
         let listShot: [[String: String]] = [
