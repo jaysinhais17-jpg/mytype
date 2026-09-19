@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 
 enum Paster {
@@ -10,6 +11,10 @@ enum Paster {
         }
         pb.clearContents()
         pb.setString(text, forType: .string)
+
+        // Posting keystrokes without Accessibility trust makes macOS show the "control this Mac" dialog every time.
+        // Without trust, leave the text on the clipboard (Cmd+V it yourself) and don't restore the old contents.
+        guard AXIsProcessTrusted() else { return }
 
         let src = CGEventSource(stateID: .combinedSessionState)
         let v: CGKeyCode = 9

@@ -70,9 +70,10 @@ final class MainWindow: NSObject {
     private let micRow: CheckRow, axRow: CheckRow, inputRow: CheckRow, keyRow: CheckRow
     private let tryView: NSTextView
     private let historyView: NSTextView
-    private let aiBox = NSButton(checkboxWithTitle: "AI cleanup (fix grammar, remove fillers, apply self-corrections)", target: nil, action: nil)
+    private let aiBox = NSButton(checkboxWithTitle: "AI cleanup — smarter edits, but needs ~2 GB RAM and adds delay", target: nil, action: nil)
     private let langBox = NSButton(checkboxWithTitle: "Auto-detect language (restart to apply)", target: nil, action: nil)
     private let loginBox = NSButton(checkboxWithTitle: "Launch MyType at login", target: nil, action: nil)
+    private let dictField = NSTextField()
     private var timer: Timer?
 
     init(app: App) {
@@ -121,18 +122,25 @@ final class MainWindow: NSObject {
             box.target = self; box.action = sel
         }
 
+        dictField.stringValue = Config.dictionary
+        dictField.placeholderString = "Names and terms MyType should spell right, comma separated"
+        dictField.target = self; dictField.action = #selector(saveDict)
+        let dictHint = NSTextField(wrappingLabelWithString: "Custom words: helps with names, drugs, jargon. Press Return to save.")
+        dictHint.font = .systemFont(ofSize: 11); dictHint.textColor = .secondaryLabelColor
+
         let stack = NSStackView(views: [
             title, status, hint,
             MainWindow.header("SETUP"), micRow.view, axRow.view, inputRow.view, keyRow.view,
             MainWindow.header("TRY IT"), tryScroll, tryRow,
             MainWindow.header("RECENT"), histScroll,
             MainWindow.header("SETTINGS"), aiBox, langBox, loginBox,
+            MainWindow.header("CUSTOM WORDS"), dictField, dictHint,
         ])
         stack.orientation = .vertical; stack.alignment = .width; stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 24, right: 24)
         stack.setCustomSpacing(4, after: title)
-        for h in [3, 8, 11, 13] { stack.setCustomSpacing(6, after: stack.arrangedSubviews[h]) }
-        for h in [2, 7, 10, 12] { stack.setCustomSpacing(22, after: stack.arrangedSubviews[h]) }
+        for h in [3, 8, 11, 13, 17] { stack.setCustomSpacing(6, after: stack.arrangedSubviews[h]) }
+        for h in [2, 7, 10, 12, 16] { stack.setCustomSpacing(22, after: stack.arrangedSubviews[h]) }
         stack.widthAnchor.constraint(equalToConstant: 580).isActive = true
         window.contentView = stack
         window.setContentSize(NSSize(width: 580, height: stack.fittingSize.height))
@@ -189,6 +197,7 @@ final class MainWindow: NSObject {
         loginBox.state = app.loginEnabled ? .on : .off
     }
 
+    @objc private func saveDict() { Config.dictionary = dictField.stringValue }
     @objc private func toggleAI() { app.aiEnabled = aiBox.state == .on }
     @objc private func toggleLang() { app.autoLanguage = langBox.state == .on }
     @objc private func toggleLogin() {

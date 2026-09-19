@@ -22,4 +22,10 @@ enum Config {
         ["/opt/homebrew/bin/whisper-server", "/usr/local/bin/whisper-server"]
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
+
+    static let defaultDictionary = "OSCE, urology, uroradiology, nephrolithiasis, hydronephrosis, cystoscopy, paediatrics, obstetrics, gynaecology"
+    static var dictionary: String {
+        get { UserDefaults.standard.string(forKey: "dictionary") ?? defaultDictionary }
+        set { UserDefaults.standard.set(newValue, forKey: "dictionary") }
+    }
 }

@@ -48,6 +48,12 @@ final class Recorder {
         }
     }
 
+    /// Samples recorded so far from `index` onward (safe to call while recording).
+    func snapshot(from index: Int) -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return index < samples.count ? Array(samples[index...]) : []
+    }
+
     func stop() -> [Float] {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()

@@ -8,6 +8,7 @@ final class App: NSObject, NSApplicationDelegate {
     private let recorder = Recorder()
     private let transcriber = Transcriber()
     private let polisher = Polisher()
+    private lazy var streamer = Streamer(recorder: recorder, transcriber: transcriber)
     private let hotkey = Hotkey()
     private let hud = HUD()
     private var window: MainWindow!
@@ -25,8 +26,12 @@ final class App: NSObject, NSApplicationDelegate {
     var llmText: String { llmLine.title }
 
     var aiEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "aiCleanup") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "aiCleanup"); aiItem.state = newValue ? .on : .off }
+        get { UserDefaults.standard.object(forKey: "aiCleanup") as? Bool ?? false }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "aiCleanup")
+            aiItem.state = newValue ? .on : .off
+            newValue ? startPolisher() : stopPolisher()
+        }
     }
     var autoLanguage: Bool {
         get { transcriber.language == "auto" }
@@ -62,13 +67,20 @@ final class App: NSObject, NSApplicationDelegate {
             self.statusLine.title = ok ? "Ready" : "Speech server failed (whisper-cpp + model installed?)"
         }
 
-        if Polisher.available {
-            polisher.start { [weak self] ok in
-                self?.llmLine.title = ok ? "AI cleanup ready" : "AI cleanup failed to start"
-            }
-        } else {
-            llmLine.title = "AI cleanup not installed"
+        if aiEnabled { startPolisher() } else { llmLine.title = "AI cleanup off" }
+    }
+
+    private func startPolisher() {
+        guard Polisher.available else { llmLine.title = "AI cleanup not installed"; return }
+        llmLine.title = "AI cleanup loading…"
+        polisher.start { [weak self] ok in
+            self?.llmLine.title = ok ? "AI cleanup ready" : "AI cleanup failed to start"
         }
+    }
+
+    private func stopPolisher() {
+        polisher.stop()
+        llmLine.title = "AI cleanup off"
     }
 
     func applicationWillTerminate(_ n: Notification) {
@@ -162,6 +174,7 @@ final class App: NSObject, NSApplicationDelegate {
         do {
             try recorder.start()
             recording = true
+            streamer.start()
             setIcon("waveform.circle.fill")
             hud.set(.listening)
             NSSound(named: "Tink")?.play()
@@ -175,16 +188,14 @@ final class App: NSObject, NSApplicationDelegate {
         let samples = recorder.stop()
         let secs = Double(samples.count) / Config.sampleRate
         guard secs >= Config.minSeconds, Audio.rms(samples) > Config.silenceRMS else {
-            setIcon("mic"); hud.set(.hidden); return
+            streamer.cancel(); setIcon("mic"); hud.set(.hidden); return
         }
         setIcon("ellipsis.circle")
         hud.set(.working)
-        let trimmed = Audio.trimSilence(samples)
         let useAI = aiEnabled
         Task {
             defer { DispatchQueue.main.async { self.setIcon("mic"); self.hud.set(.hidden) } }
-            guard let raw = try? await transcriber.transcribe(trimmed) else { return }
-            var cleaned = TextCleaner.clean(raw)
+            var cleaned = TextCleaner.clean(await streamer.finish(allSamples: samples))
             guard !cleaned.isEmpty else { return }
             if useAI { cleaned = await polisher.polish(cleaned) }
             let text = cleaned

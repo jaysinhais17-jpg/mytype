@@ -21,8 +21,7 @@ final class Transcriber {
             "-m", Config.modelPath,
             "--host", "127.0.0.1", "--port", String(Config.serverPort),
             "-t", "4", "-nt", "-sns", "-l", language,
-            "-ac", "768", // ~15s audio context: ~40% faster on short dictation; long audio is chunked below
-            "--prompt", "Hello. This is a clear, punctuated sentence.",
+            "-ac", "512", // ~10s audio context: fastest per clip; Streamer keeps every chunk under 8.5s
         ]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
@@ -62,39 +61,7 @@ final class Transcriber {
         return ok
     }
 
-    /// Splits long audio at the quietest point near 10-14s so each piece fits the 15s audio context.
-    private func chunks(_ s: [Float]) -> [[Float]] {
-        let sr = Int(Config.sampleRate)
-        var out: [[Float]] = []
-        var rest = s[...]
-        while rest.count > 14 * sr {
-            let lo = rest.startIndex + 10 * sr, hi = rest.startIndex + 14 * sr
-            let win = sr / 20 // 50ms energy windows
-            var best = lo, bestE = Float.greatestFiniteMagnitude
-            var i = lo
-            while i + win < hi {
-                var e: Float = 0
-                for j in i..<(i + win) { e += rest[j] * rest[j] }
-                if e < bestE { bestE = e; best = i + win / 2 }
-                i += win
-            }
-            out.append(Array(rest[rest.startIndex..<best]))
-            rest = rest[best...]
-        }
-        out.append(Array(rest))
-        return out
-    }
-
-    func transcribe(_ samples: [Float]) async throws -> String {
-        var parts: [String] = []
-        for c in chunks(samples) {
-            let t = try await transcribeChunk(c).trimmingCharacters(in: .whitespacesAndNewlines)
-            if !t.isEmpty { parts.append(t) }
-        }
-        return parts.joined(separator: " ")
-    }
-
-    private func transcribeChunk(_ samples: [Float]) async throws -> String {
+    func transcribeChunk(_ samples: [Float], prompt: String) async throws -> String {
         let boundary = "MyType-\(UUID().uuidString)"
         var body = Data()
         func field(_ name: String, _ value: String) {
@@ -102,6 +69,7 @@ final class Transcriber {
         }
         field("response_format", "json")
         field("temperature", "0.0")
+        field("prompt", prompt)
         body.append("--\(boundary)\r\nContent-Disposition: form-data; name=\"file\"; filename=\"a.wav\"\r\nContent-Type: audio/wav\r\n\r\n".data(using: .utf8)!)
         body.append(Audio.wav(samples))
         body.append("\r\n--\(boundary)--\r\n".data(using: .utf8)!)
@@ -134,6 +102,11 @@ enum TextCleaner {
         // Collapse stutter repeats: "the the" -> "the"
         t = t.replacingOccurrences(of: #"(?i)\b(\w+)(\s+\1\b)+"#, with: "$1", options: .regularExpression)
         t = t.replacingOccurrences(of: #"\s{2,}"#, with: " ", options: .regularExpression)
+        // Self-corrections: keep what follows "scratch that" / "no wait" / "I mean" only when it restarts the sentence.
+        t = t.replacingOccurrences(of: #"(?i)^.*\b(scratch that|never ?mind that)[,.]?\s+"#, with: "", options: .regularExpression)
+        // Spoken formatting
+        t = t.replacingOccurrences(of: #"(?i)[,.]?\s*\bnew paragraph\b[,.]?\s*"#, with: "\n\n", options: .regularExpression)
+        t = t.replacingOccurrences(of: #"(?i)[,.]?\s*\bnew line\b[,.]?\s*"#, with: "\n", options: .regularExpression)
         // Spoken emails: "john at gmail dot com" -> john@gmail.com
         t = t.replacingOccurrences(
             of: #"(?i)\b([a-z0-9._-]+) at ([a-z0-9-]+) dot (com|org|net|io|edu|co|ai|dev|app)\b"#,
