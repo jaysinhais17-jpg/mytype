@@ -235,8 +235,10 @@ final class App: NSObject, NSApplicationDelegate {
         Task {
             defer { DispatchQueue.main.async { self.setIcon("mic"); self.hud.set(.hidden) } }
             let raw: String
+            var engine = "local"
             if let dg {
-                if let t = await dg.finish(allSamples: samples) { raw = t } else { raw = await streamer.transcribeAll(samples) }
+                if let t = await dg.finish(allSamples: samples) { raw = t; engine = "deepgram" }
+                else { raw = await streamer.transcribeAll(samples); engine = "local (deepgram failed)" }
             } else { raw = await streamer.finish(allSamples: samples) }
             let t1 = Date()
             var cleaned = TextCleaner.clean(raw)
@@ -245,7 +247,7 @@ final class App: NSObject, NSApplicationDelegate {
             let text = cleaned
             let t2 = Date()
             Log.write(String(format: "speech %.2fs (%@) · cleanup %.2fs (%@) · total %.2fs · %.1fs audio",
-                             t1.timeIntervalSince(t0), dg != nil ? "deepgram" : "local",
+                             t1.timeIntervalSince(t0), engine,
                              t2.timeIntervalSince(t1), useAI ? (Cloud.useLLM ? "cloud" : "local") : "off",
                              t2.timeIntervalSince(t0), secs))
             await MainActor.run {

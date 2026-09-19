@@ -4,9 +4,13 @@ import Foundation
 enum Cloud {
     private static func get(_ k: String, _ d: String = "") -> String { UserDefaults.standard.string(forKey: k) ?? d }
     private static func set(_ k: String, _ v: String) { UserDefaults.standard.set(v.trimmingCharacters(in: .whitespacesAndNewlines), forKey: k) }
+    /// Keys never contain spaces, so a paste with stray text after the key still yields just the key.
+    private static func key(_ k: String) -> String {
+        get(k).split(whereSeparator: { $0.isWhitespace }).first.map { String($0).trimmingCharacters(in: CharacterSet(charactersIn: "\"'")) } ?? ""
+    }
 
-    static var deepgramKey: String { get { get("deepgramKey") } set { set("deepgramKey", newValue) } }
-    static var llmKey: String { get { get("llmKey") } set { set("llmKey", newValue) } }
+    static var deepgramKey: String { get { key("deepgramKey") } set { set("deepgramKey", newValue) } }
+    static var llmKey: String { get { key("llmKey") } set { set("llmKey", newValue) } }
     /// Any OpenAI-compatible chat endpoint: Gemini, DeepSeek, OpenAI, Groq…
     static var llmBaseURL: String {
         get { get("llmBaseURL", "https://generativelanguage.googleapis.com/v1beta/openai") }
