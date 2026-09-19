@@ -107,7 +107,7 @@ final class MainWindow: NSObject {
         title.font = .systemFont(ofSize: 26, weight: .bold)
         status.font = .systemFont(ofSize: 12, weight: .medium)
         status.textColor = .secondaryLabelColor
-        let hint = NSTextField(wrappingLabelWithString: "Hold Fn to talk, or tap Fn to go hands-free (tap again to stop). Right Option works too.")
+        let hint = NSTextField(wrappingLabelWithString: "Hold Fn to talk, or double-tap Fn to go hands-free (tap once more to stop). Right Option works too.")
         hint.font = .systemFont(ofSize: 13)
 
         let talk = HoldButton(title: "Hold to talk", target: nil, action: nil)

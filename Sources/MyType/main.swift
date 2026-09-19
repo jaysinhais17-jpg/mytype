@@ -15,6 +15,8 @@ final class App: NSObject, NSApplicationDelegate {
     private var recording = false
     private var locked = false // hands-free mode after a quick tap
     private var pressStart = Date()
+    private var lastTapUp = Date.distantPast
+    private var hudWork: DispatchWorkItem?
     private let statusLine = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
     private let llmLine = NSMenuItem(title: "AI cleanup: loading…", action: nil, keyEquivalent: "")
     private let aiItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleAIMenu), keyEquivalent: "")
@@ -153,36 +155,54 @@ final class App: NSObject, NSApplicationDelegate {
 
     // MARK: recording
 
-    /// Tap Fn = start/stop hands-free. Hold Fn = push-to-talk.
+    /// Hold Fn = push-to-talk. Double-tap Fn = hands-free (tap once more to stop).
     private func keyDown() {
         if recording && locked { locked = false; finish(); return }
         guard !recording else { return }
         pressStart = Date()
-        begin()
+        let isDouble = Date().timeIntervalSince(lastTapUp) < Config.doubleTapSeconds
+        begin(showAfter: isDouble ? 0 : Config.tapSeconds)
+        if isDouble && recording { locked = true }
     }
 
     private func keyUp() {
         guard recording, !locked else { return }
-        if Date().timeIntervalSince(pressStart) < Config.tapSeconds { locked = true } else { finish() }
+        if Date().timeIntervalSince(pressStart) < Config.tapSeconds {
+            cancelRecording()
+            lastTapUp = Date()
+        } else { finish() }
     }
 
-    func beginManual() { if !recording { begin() } }
+    func beginManual() { if !recording { begin(showAfter: 0) } }
     func finishManual() { locked = false; finish() }
 
-    private func begin() {
+    private func begin(showAfter delay: TimeInterval) {
         guard transcriber.ready, !recording else { return }
         do {
             try recorder.start()
             recording = true
             streamer.start()
             setIcon("waveform.circle.fill")
-            hud.set(.listening)
-            NSSound(named: "Tink")?.play()
+            let show = DispatchWorkItem { [weak self] in
+                self?.hud.set(.listening)
+                NSSound(named: "Tink")?.play()
+            }
+            hudWork = show
+            if delay == 0 { show.perform() } else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: show) }
         } catch { setIcon("exclamationmark.triangle") }
+    }
+
+    private func cancelRecording() {
+        hudWork?.cancel(); hudWork = nil
+        recording = false; locked = false
+        _ = recorder.stop()
+        streamer.cancel()
+        setIcon("mic"); hud.set(.hidden)
     }
 
     private func finish() {
         guard recording else { return }
+        hudWork?.cancel(); hudWork = nil
         recording = false
         locked = false
         let samples = recorder.stop()

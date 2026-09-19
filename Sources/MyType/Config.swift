@@ -14,7 +14,8 @@ enum Config {
     }
     static let sampleRate = 16_000.0
     /// A press shorter than this is a "tap" (toggle hands-free); longer is push-to-talk.
-    static let tapSeconds = 0.35
+    static let tapSeconds = 0.25       // shorter than this = a tap, not a hold
+    static let doubleTapSeconds = 0.4  // second tap within this = hands-free
     static let minSeconds = 0.35
     static let silenceRMS: Float = 0.004
 
