@@ -10,7 +10,7 @@ final class Polisher {
         Config.llamaBinary != nil && FileManager.default.fileExists(atPath: Config.llmModelPath)
     }
 
-    private static let system = """
+    static let system = """
     You clean up speech-to-text dictation. The user message is a raw transcript inside <t></t> tags. \
     Output the text the speaker meant to type. Rules: (1) fix punctuation and capitalization; \
     (2) remove filler words (um, uh, like, you know, basically when used as filler) and false starts; \
@@ -21,7 +21,7 @@ final class Polisher {
     Output only the cleaned text.
     """
 
-    private static let shots: [[String: String]] = [
+    static let shots: [[String: String]] = [
         ["role": "user", "content": "<t>so um i think we should meet on tuesday no wait wednesday at like 3 pm</t>"],
         ["role": "assistant", "content": "I think we should meet on Wednesday at 3 PM."],
         ["role": "user", "content": "<t>email me at bob@outlook.com</t>"],
@@ -104,18 +104,22 @@ final class Polisher {
         return out
     }
 
+    /// Strips wrapper tags/quotes and rejects outputs whose length is implausible for a cleanup.
+    static func accept(_ raw: String, for text: String) -> String {
+        var out = raw.replacingOccurrences(of: "</t>", with: "").replacingOccurrences(of: "<t>", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if out.count >= 2, out.first == "\"", out.last == "\"" { out = String(out.dropFirst().dropLast()) }
+        let ratio = Double(out.count) / Double(max(1, text.count))
+        return out.isEmpty || ratio < 0.4 || ratio > 1.6 ? text : out
+    }
+
     /// Returns polished text, or the input unchanged if the LLM is unavailable, slow, or misbehaves.
     func polish(_ text: String) async -> String {
         guard ready, text.split(separator: " ").count >= 5 else { return text }
         return await withCheckedContinuation { cont in
             DispatchQueue.global().async {
-                guard var out = try? self.blockingPolish(text) else { cont.resume(returning: text); return }
-                out = out.replacingOccurrences(of: "</t>", with: "").replacingOccurrences(of: "<t>", with: "")
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
-                if out.count >= 2, out.first == "\"", out.last == "\"" { out = String(out.dropFirst().dropLast()) }
-                // Sanity check: a cleanup should not change length much.
-                let ratio = Double(out.count) / Double(max(1, text.count))
-                cont.resume(returning: out.isEmpty || ratio < 0.4 || ratio > 1.6 ? text : out)
+                guard let out = try? self.blockingPolish(text) else { cont.resume(returning: text); return }
+                cont.resume(returning: Polisher.accept(out, for: text))
             }
         }
     }

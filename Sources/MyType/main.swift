@@ -8,6 +8,8 @@ final class App: NSObject, NSApplicationDelegate {
     private let recorder = Recorder()
     private let transcriber = Transcriber()
     private let polisher = Polisher()
+    private let cloudPolisher = CloudPolisher()
+    private var deepgram: DeepgramSession?
     private lazy var streamer = Streamer(recorder: recorder, transcriber: transcriber)
     private let hotkey = Hotkey()
     private let hud = HUD()
@@ -28,11 +30,11 @@ final class App: NSObject, NSApplicationDelegate {
     var llmText: String { llmLine.title }
 
     var aiEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: "aiCleanup") as? Bool ?? false }
+        get { UserDefaults.standard.object(forKey: "aiCleanup") as? Bool ?? Cloud.useLLM }
         set {
             UserDefaults.standard.set(newValue, forKey: "aiCleanup")
             aiItem.state = newValue ? .on : .off
-            newValue ? startPolisher() : stopPolisher()
+            refreshAI()
         }
     }
     var autoLanguage: Bool {
@@ -69,7 +71,16 @@ final class App: NSObject, NSApplicationDelegate {
             self.statusLine.title = ok ? "Ready" : "Speech server failed (whisper-cpp + model installed?)"
         }
 
-        if aiEnabled { startPolisher() } else { llmLine.title = "AI cleanup off" }
+        refreshAI()
+    }
+
+    var engineText: String { Cloud.useDeepgram ? "Speech: Deepgram" : "Speech: on-device" }
+
+    /// Called at launch and whenever the toggle or cloud keys change.
+    func refreshAI() {
+        if !aiEnabled { stopPolisher() }
+        else if Cloud.useLLM { polisher.stop(); llmLine.title = "AI cleanup ready (cloud)" }
+        else if !polisher.ready { startPolisher() }
     }
 
     private func startPolisher() {
@@ -181,7 +192,11 @@ final class App: NSObject, NSApplicationDelegate {
         do {
             try recorder.start()
             recording = true
-            streamer.start()
+            if Cloud.useDeepgram {
+                let d = DeepgramSession(recorder: recorder)
+                d.start(language: transcriber.language == "auto" ? "multi" : "en")
+                deepgram = d
+            } else { streamer.start() }
             setIcon("waveform.circle.fill")
             let show = DispatchWorkItem { [weak self] in
                 self?.hud.set(.listening)
@@ -197,6 +212,7 @@ final class App: NSObject, NSApplicationDelegate {
         recording = false; locked = false
         _ = recorder.stop()
         streamer.cancel()
+        deepgram?.cancel(); deepgram = nil
         setIcon("mic"); hud.set(.hidden)
     }
 
@@ -208,16 +224,21 @@ final class App: NSObject, NSApplicationDelegate {
         let samples = recorder.stop()
         let secs = Double(samples.count) / Config.sampleRate
         guard secs >= Config.minSeconds, Audio.rms(samples) > Config.silenceRMS else {
-            streamer.cancel(); setIcon("mic"); hud.set(.hidden); return
+            streamer.cancel(); deepgram?.cancel(); deepgram = nil; setIcon("mic"); hud.set(.hidden); return
         }
         setIcon("ellipsis.circle")
         hud.set(.working)
         let useAI = aiEnabled
+        let dg = deepgram; deepgram = nil
         Task {
             defer { DispatchQueue.main.async { self.setIcon("mic"); self.hud.set(.hidden) } }
-            var cleaned = TextCleaner.clean(await streamer.finish(allSamples: samples))
+            let raw: String
+            if let dg {
+                if let t = await dg.finish(allSamples: samples) { raw = t } else { raw = await streamer.transcribeAll(samples) }
+            } else { raw = await streamer.finish(allSamples: samples) }
+            var cleaned = TextCleaner.clean(raw)
             guard !cleaned.isEmpty else { return }
-            if useAI { cleaned = await polisher.polish(cleaned) }
+            if useAI { cleaned = Cloud.useLLM ? await cloudPolisher.polish(cleaned) : await polisher.polish(cleaned) }
             let text = cleaned
             await MainActor.run {
                 // Inside our own window, type straight into the "Try it" box.

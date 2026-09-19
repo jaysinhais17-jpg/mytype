@@ -63,7 +63,7 @@ final class CheckRow: NSObject {
     }
 }
 
-final class MainWindow: NSObject {
+final class MainWindow: NSObject, NSTextFieldDelegate {
     let window: NSWindow
     private unowned let app: App
     private let status = NSTextField(labelWithString: "")
@@ -74,6 +74,16 @@ final class MainWindow: NSObject {
     private let langBox = NSButton(checkboxWithTitle: "Auto-detect language (restart to apply)", target: nil, action: nil)
     private let loginBox = NSButton(checkboxWithTitle: "Launch MyType at login", target: nil, action: nil)
     private let dictField = NSTextField()
+    private let dgField = NSSecureTextField()
+    private let llmKeyField = NSSecureTextField()
+    private let llmURLField = NSTextField()
+    private let llmModelField = NSTextField()
+    private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private static let presets: [(String, String, String)] = [
+        ("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-flash-lite-latest"),
+        ("DeepSeek", "https://api.deepseek.com", "deepseek-chat"),
+        ("OpenAI", "https://api.openai.com/v1", "gpt-4o-mini"),
+    ]
     private var timer: Timer?
 
     init(app: App) {
@@ -97,7 +107,7 @@ final class MainWindow: NSObject {
         let (histScroll, hv) = MainWindow.textArea(height: 110, editable: false)
         tryView = tv; historyView = hv
 
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 700),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 580, height: 900),
                           styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
         window.title = "MyType"
         window.isReleasedWhenClosed = false
@@ -128,6 +138,21 @@ final class MainWindow: NSObject {
         let dictHint = NSTextField(wrappingLabelWithString: "Custom words: helps with names, drugs, jargon. Press Return to save.")
         dictHint.font = .systemFont(ofSize: 11); dictHint.textColor = .secondaryLabelColor
 
+        func row(_ label: String, _ f: NSTextField, _ ph: String, _ v: String) -> NSStackView {
+            f.stringValue = v; f.placeholderString = ph; f.delegate = self
+            let l = NSTextField(labelWithString: label); l.font = .systemFont(ofSize: 12)
+            l.widthAnchor.constraint(equalToConstant: 120).isActive = true
+            let r = NSStackView(views: [l, f]); r.spacing = 8; return r
+        }
+        presetPopup.addItems(withTitles: ["Custom"] + MainWindow.presets.map { $0.0 })
+        presetPopup.target = self; presetPopup.action = #selector(pickPreset)
+        if let i = MainWindow.presets.firstIndex(where: { $0.1 == Cloud.llmBaseURL }) { presetPopup.selectItem(at: i + 1) }
+        let presetLabel = NSTextField(labelWithString: "Cleanup provider"); presetLabel.font = .systemFont(ofSize: 12)
+        presetLabel.widthAnchor.constraint(equalToConstant: 120).isActive = true
+        let presetRow = NSStackView(views: [presetLabel, presetPopup]); presetRow.spacing = 8
+        let cloudHint = NSTextField(wrappingLabelWithString: "Optional. With a Deepgram key, speech goes to Deepgram (faster, more accurate); with a cleanup key, text goes to that model for punctuation and edits. Leave blank to stay fully on-device. Audio and text leave your Mac when these are set. Keys are stored on this Mac only.")
+        cloudHint.font = .systemFont(ofSize: 11); cloudHint.textColor = .secondaryLabelColor
+
         let stack = NSStackView(views: [
             title, status, hint,
             MainWindow.header("SETUP"), micRow.view, axRow.view, inputRow.view, keyRow.view,
@@ -135,12 +160,19 @@ final class MainWindow: NSObject {
             MainWindow.header("RECENT"), histScroll,
             MainWindow.header("SETTINGS"), aiBox, langBox, loginBox,
             MainWindow.header("CUSTOM WORDS"), dictField, dictHint,
+            MainWindow.header("CLOUD (OPTIONAL)"),
+            row("Deepgram key", dgField, "Paste key to use Deepgram for speech", Cloud.deepgramKey),
+            presetRow,
+            row("Cleanup key", llmKeyField, "Paste API key for the cleanup model", Cloud.llmKey),
+            row("Base URL", llmURLField, "https://…", Cloud.llmBaseURL),
+            row("Model", llmModelField, "model name", Cloud.llmModel),
+            cloudHint,
         ])
         stack.orientation = .vertical; stack.alignment = .width; stack.spacing = 10
         stack.edgeInsets = NSEdgeInsets(top: 22, left: 24, bottom: 24, right: 24)
         stack.setCustomSpacing(4, after: title)
-        for h in [3, 8, 11, 13, 17] { stack.setCustomSpacing(6, after: stack.arrangedSubviews[h]) }
-        for h in [2, 7, 10, 12, 16] { stack.setCustomSpacing(22, after: stack.arrangedSubviews[h]) }
+        for h in [3, 8, 11, 13, 17, 20] { stack.setCustomSpacing(6, after: stack.arrangedSubviews[h]) }
+        for h in [2, 7, 10, 12, 16, 19] { stack.setCustomSpacing(22, after: stack.arrangedSubviews[h]) }
         stack.widthAnchor.constraint(equalToConstant: 580).isActive = true
         window.contentView = stack
         window.setContentSize(NSSize(width: 580, height: stack.fittingSize.height))
@@ -191,12 +223,26 @@ final class MainWindow: NSObject {
         axRow.set(ok: AXIsProcessTrusted())
         inputRow.set(ok: CGPreflightListenEventAccess())
         keyRow.set(ok: app.keySeen, pending: app.hotkeyInstalled)
-        status.stringValue = "\(app.statusText)   ·   \(app.llmText)"
+        status.stringValue = "\(app.statusText)   ·   \(app.engineText)   ·   \(app.llmText)"
         aiBox.state = app.aiEnabled ? .on : .off
         langBox.state = app.autoLanguage ? .on : .off
         loginBox.state = app.loginEnabled ? .on : .off
     }
 
+    func controlTextDidEndEditing(_ obj: Notification) {
+        Cloud.deepgramKey = dgField.stringValue
+        Cloud.llmKey = llmKeyField.stringValue
+        Cloud.llmBaseURL = llmURLField.stringValue
+        Cloud.llmModel = llmModelField.stringValue
+        app.refreshAI()
+    }
+    @objc private func pickPreset() {
+        let i = presetPopup.indexOfSelectedItem - 1
+        guard i >= 0 else { return }
+        llmURLField.stringValue = MainWindow.presets[i].1
+        llmModelField.stringValue = MainWindow.presets[i].2
+        controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
+    }
     @objc private func saveDict() { Config.dictionary = dictField.stringValue }
     @objc private func toggleAI() { app.aiEnabled = aiBox.state == .on }
     @objc private func toggleLang() { app.autoLanguage = langBox.state == .on }

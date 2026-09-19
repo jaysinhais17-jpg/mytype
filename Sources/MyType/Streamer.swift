@@ -74,6 +74,18 @@ final class Streamer {
         })
     }
 
+    /// Offline path for a finished recording (used when the cloud is unreachable): split under 8.5 s and transcribe.
+    func transcribeAll(_ all: [Float]) async -> String {
+        prompt = Streamer.makePrompt()
+        committed = 0
+        pieces = []
+        while Double(all.count - committed) / Double(sr) > maxChunk {
+            let pending = Array(all[committed...])
+            commit(quietestCut(pending), of: pending)
+        }
+        return await finish(allSamples: all)
+    }
+
     func cancel() {
         timer?.invalidate(); timer = nil
         pieces.forEach { $0.cancel() }
