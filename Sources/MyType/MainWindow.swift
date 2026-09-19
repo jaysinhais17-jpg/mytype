@@ -63,6 +63,8 @@ final class CheckRow: NSObject {
     }
 }
 
+final class FlippedView: NSView { override var isFlipped: Bool { true } }
+
 final class MainWindow: NSObject, NSTextFieldDelegate {
     let window: NSWindow
     private unowned let app: App
@@ -174,8 +176,19 @@ final class MainWindow: NSObject, NSTextFieldDelegate {
         for h in [3, 8, 11, 13, 17, 20] { stack.setCustomSpacing(6, after: stack.arrangedSubviews[h]) }
         for h in [2, 7, 10, 12, 16, 19] { stack.setCustomSpacing(22, after: stack.arrangedSubviews[h]) }
         stack.widthAnchor.constraint(equalToConstant: 580).isActive = true
-        window.contentView = stack
-        window.setContentSize(NSSize(width: 580, height: stack.fittingSize.height))
+        let full = stack.fittingSize.height
+        let doc = FlippedView(frame: NSRect(x: 0, y: 0, width: 580, height: full))
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        doc.addSubview(stack)
+        NSLayoutConstraint.activate([stack.topAnchor.constraint(equalTo: doc.topAnchor),
+                                     stack.leadingAnchor.constraint(equalTo: doc.leadingAnchor)])
+        let scroll = NSScrollView()
+        scroll.documentView = doc
+        scroll.hasVerticalScroller = true
+        scroll.drawsBackground = false
+        window.contentView = scroll
+        let maxH = (NSScreen.main?.visibleFrame.height ?? 800) - 80
+        window.setContentSize(NSSize(width: 580 + 15, height: min(full, maxH)))
         window.center()
         refresh()
         reloadHistory()
