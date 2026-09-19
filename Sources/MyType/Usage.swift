@@ -87,3 +87,38 @@ enum Usage {
         return (all.speechCost, all.total / days * 30)
     }
 }
+
+/// Live prepaid balance straight from Deepgram. Needs a key with billing access (Administrator role); ordinary keys are refused.
+enum DeepgramBalance {
+    static var amount: Double? { UserDefaults.standard.object(forKey: "dgBalance") as? Double }
+    static var updated: Date? { UserDefaults.standard.object(forKey: "dgBalanceAt") as? Date }
+    static var note: String { UserDefaults.standard.string(forKey: "dgBalanceNote") ?? "" }
+    private static var lastTry = Date.distantPast
+
+    /// Fetches the balance (at most once every 20 s unless forced) and calls `done` on the main queue.
+    static func refresh(force: Bool = false, done: @escaping () -> Void) {
+        guard Cloud.useDeepgram, Net.online, force || Date().timeIntervalSince(lastTry) > 20 else { return }
+        lastTry = Date()
+        Task {
+            let d = UserDefaults.standard
+            func get(_ path: String) async -> (Any, Int)? {
+                var r = URLRequest(url: URL(string: "https://api.deepgram.com/v1" + path)!)
+                r.timeoutInterval = 8
+                r.setValue("Token \(Cloud.deepgramKey)", forHTTPHeaderField: "Authorization")
+                guard let (data, resp) = try? await URLSession.shared.data(for: r),
+                      let j = try? JSONSerialization.jsonObject(with: data) else { return nil }
+                return (j, (resp as? HTTPURLResponse)?.statusCode ?? 0)
+            }
+            if let (pj, _) = await get("/projects"), let pid = ((pj as? [String: Any])?["projects"] as? [[String: Any]])?.first?["project_id"] as? String,
+               let (bj, code) = await get("/projects/\(pid)/balances") {
+                if code == 200, let list = (bj as? [String: Any])?["balances"] as? [[String: Any]] {
+                    let usd = list.filter { ($0["units"] as? String ?? "usd").lowercased() == "usd" }.compactMap { $0["amount"] as? Double }
+                    d.set(usd.reduce(0, +), forKey: "dgBalance"); d.set(Date(), forKey: "dgBalanceAt"); d.set("", forKey: "dgBalanceNote")
+                } else if code == 403 {
+                    d.set("Live balance needs a Deepgram key with the Administrator role. In console.deepgram.com go to API Keys, create one with Administrator, and paste it in Settings.", forKey: "dgBalanceNote")
+                } else { d.set("Couldn't reach Deepgram's billing API.", forKey: "dgBalanceNote") }
+            }
+            await MainActor.run(body: done)
+        }
+    }
+}

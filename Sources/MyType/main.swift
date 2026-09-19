@@ -274,6 +274,7 @@ final class App: NSObject, NSApplicationDelegate {
                 if NSApp.isActive && self.window.window.isKeyWindow { self.window.insertTry(text) } else { Paster.paste(text) }
                 History.add(text)
                 self.window.reloadHistory()
+                if engine == "deepgram" { DeepgramBalance.refresh { self.window.reloadUsage() } }
             }
         }
     }

@@ -222,6 +222,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private var usageCells: [[NSTextField]] = []
     private let dgRateField = NSTextField(), inRateField = NSTextField(), outRateField = NSTextField(), creditField = NSTextField()
     private let cleanupFreeSwitch = PurpleSwitch()
+    private let sumWould = makeLabel("–", size: 26, weight: .bold), sumPay = makeLabel("–", size: 26, weight: .bold), sumCredit = makeLabel("–", size: 26, weight: .bold)
+    private let sumWouldNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true), sumPayNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true), sumCreditNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true)
     private let creditLabel = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
 
     private static let presets: [(String, String, String)] = [
@@ -524,6 +526,18 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         }
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 12; grid.columnSpacing = 22
+        func tile(_ title: String, _ value: NSTextField, _ note: NSTextField, accent: Bool = false) -> Surface {
+            let t = Surface(fill: accent ? Theme.purple.withAlphaComponent(0.12) : Theme.field, stroke: accent ? Theme.purple.withAlphaComponent(0.5) : Theme.line, radius: 12)
+            pin(vstack([makeLabel(title, size: 12, weight: .medium, color: .secondaryLabelColor), value, note], spacing: 4), in: t, top: 14, leading: 16, trailing: 16, bottom: 14)
+            return t
+        }
+        let tiles = NSStackView(views: [tile("Would cost at list price", sumWould, sumWouldNote),
+                                        tile("You actually pay", sumPay, sumPayNote, accent: true),
+                                        tile("Deepgram credit left", sumCredit, sumCreditNote)])
+        tiles.distribution = .fillEqually; tiles.spacing = 12
+        let refresh = PillButton(title: "Refresh balance", primary: false)
+        refresh.target = self; refresh.action = #selector(refreshBalance)
+        let summary = card([sectionTitle("This month"), tiles, refresh], spacing: 14)
         let table = card([sectionTitle("Running cost"), grid, creditLabel,
                           makeLabel("List price is what these dictations would cost at normal rates. You pay is what actually leaves your pocket: speech is covered by your Deepgram credit until it runs out, and cleanup is covered by the free tier while that switch is on. Estimates from the rates below, not an invoice.",
                                     size: 11, color: .secondaryLabelColor, wrap: true)])
@@ -540,10 +554,13 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             settingRow("Cleanup output, per 1M tokens", "Defaults are a rough guess for Groq's Qwen models. Check your provider's pricing page and edit.",
                        field(outRateField, placeholder: "0.59", value: String(Usage.llmOutPerMillion), width: 90)),
         ])
-        return page([pageHeader("Usage", "What your API keys are costing, tracked on this Mac."), table, rates])
+        return page([pageHeader("Usage", "What your API keys are costing, tracked on this Mac."), summary, table, rates])
     }
 
+    @objc private func refreshBalance() { DeepgramBalance.refresh(force: true) { [weak self] in self?.reloadUsage() } }
+
     func reloadUsage() {
+        DeepgramBalance.refresh { [weak self] in self?.reloadUsage() }
         let evs = Usage.events()
         let cal = Calendar.current, now = Date()
         let since: [Date?] = [cal.startOfDay(for: now), cal.dateInterval(of: .month, for: now)?.start, nil]
@@ -556,6 +573,20 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             for (c, v) in vals.enumerated() { usageCells[i][c].stringValue = v }
         }
         let st = Usage.creditStatus(evs), credit = Usage.deepgramCredit
+        let month = Usage.totals(evs, since: since[1])
+        sumWould.stringValue = usd(month.total)
+        sumWouldNote.stringValue = "Speech \(usd(month.speechCost)) + cleanup \(usd(month.cleanupCost)). What this would cost with no credit and no free tier."
+        sumPay.stringValue = usd(month.youPay)
+        sumPayNote.stringValue = month.youPay < 0.005 ? "Nothing. Your Deepgram credit and the free cleanup tier cover it all."
+            : "Speech beyond your credit\(Usage.cleanupFree ? "" : " plus cleanup")."
+        if let live = DeepgramBalance.amount, DeepgramBalance.note.isEmpty {
+            sumCredit.stringValue = usd(live)
+            let f = DateFormatter(); f.timeStyle = .short; f.dateStyle = .none
+            sumCreditNote.stringValue = "Live from Deepgram (\(f.string(from: DeepgramBalance.updated ?? Date()))). \(usd(max(0, credit - live))) of \(usd(credit)) used so far."
+        } else {
+            sumCredit.stringValue = usd(max(0, credit - st.used))
+            sumCreditNote.stringValue = DeepgramBalance.note.isEmpty ? "Estimated from this Mac's usage." : "Estimated from this Mac's usage. " + DeepgramBalance.note
+        }
         var line = "Deepgram credit: \(usd(max(0, credit - st.used))) left of \(usd(credit)). At your current pace the true cost is about \(usd(st.monthly)) a month"
         if st.monthly > 0 { line += String(format: ", so the credit lasts roughly %.0f months.", max(0, credit - st.used) / max(0.0001, evs.isEmpty ? 1 : st.monthly)) } else { line += "." }
         creditLabel.stringValue = line

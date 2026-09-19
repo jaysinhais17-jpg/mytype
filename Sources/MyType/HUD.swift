@@ -52,6 +52,8 @@ private final class HUDView: NSView {
     private var target: CGFloat = 0   // latest voice level (0...1), decays between audio buffers
     private var smooth: CGFloat = 0   // low-passed copy of `target`; everything animated follows this, so nothing steps
     private var comet: CGFloat = 0    // working-spinner visibility, eased
+    private var lit: CGFloat = 0      // 0 = plain grey disc until the first word, then eases to purple and stays
+    private var spoke = false
     private var shimmer: CGFloat = 0  // clock for the purple sheen that sweeps across the mic while you speak
     private var spin: CGFloat = 0     // comet angle in degrees; only advances while there is voice
     private var ripple: CGFloat = 0   // integrated ripple clock (never jumps when the voice level changes)
@@ -83,7 +85,7 @@ private final class HUDView: NSView {
 
     func restartIntro() {
         introStart = Date(); introTime = CACurrentMediaTime()
-        target = 0; smooth = 0; comet = 0; ripple = 0; breath = 0; shimmer = 0; floor = 0.004
+        target = 0; smooth = 0; comet = 0; lit = 0; spoke = false; ripple = 0; breath = 0; shimmer = 0; floor = 0.004
         lastVoice = CACurrentMediaTime() - 10
         lastTick = CACurrentMediaTime()
     }
@@ -96,7 +98,7 @@ private final class HUDView: NSView {
         if x < floor { floor = x } else { floor = min(0.02, floor + (x - floor) * 0.004) }
         let gate = max(0.012, floor * 2.5 + 0.004)
         let act = min(1, max(0, (x - gate) / 0.05)).squareRoot()
-        if act > 0.12 { lastVoice = CACurrentMediaTime() }
+        if act > 0.12 { lastVoice = CACurrentMediaTime(); spoke = true }
         target = max(target, act)
     }
 
@@ -122,6 +124,7 @@ private final class HUDView: NSView {
         if now - lastVoice < 1.1 { target = max(target, 0.45) }
         follow(&smooth, to: target, attack: 0.09, release: 0.28, dt: dt)
         follow(&comet, to: mode == .working ? 1 : 0, attack: 0.1, release: 0.25, dt: dt)
+        follow(&lit, to: (spoke || mode == .working) ? 1 : 0, attack: 0.35, release: 0.35, dt: dt)
         spin += 300 * comet * dt
         shimmer += dt * (0.5 + 0.9 * smooth)
         ripple += dt * (0.35 + 0.9 * smooth)
@@ -176,7 +179,8 @@ private final class HUDView: NSView {
         ctx.restoreGState()
         let edge = circle(r - 1)
         edge.lineWidth = 2
-        bright.blended(withFraction: 0.35 * glow, of: NSColor(red: 0.72, green: 0.58, blue: 1, alpha: 1))?.setStroke()
+        let rest = NSColor(white: 0.30, alpha: 1).blended(withFraction: lit, of: bright) ?? bright
+        rest.blended(withFraction: 0.35 * glow, of: NSColor(red: 0.72, green: 0.58, blue: 1, alpha: 1))?.setStroke()
         edge.stroke()
 
         // While working, a purple arc circles the rim.
