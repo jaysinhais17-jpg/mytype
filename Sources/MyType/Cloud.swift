@@ -173,6 +173,9 @@ final class CloudPolisher {
               let j = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let m = (j["choices"] as? [[String: Any]])?.first?["message"] as? [String: Any],
               let out = m["content"] as? String else { return text }
+        if let u = j["usage"] as? [String: Any] {
+            Usage.add(UsageEvent(date: Date(), promptTokens: u["prompt_tokens"] as? Int ?? 0, completionTokens: u["completion_tokens"] as? Int ?? 0))
+        }
         return Polisher.accept(out, for: text)
     }
 }

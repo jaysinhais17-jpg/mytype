@@ -241,6 +241,7 @@ final class App: NSObject, NSApplicationDelegate {
                 else { raw = await streamer.transcribeAll(samples); engine = "local (deepgram failed)" }
             } else { raw = await streamer.finish(allSamples: samples) }
             let t1 = Date()
+            if engine == "deepgram" { Usage.add(UsageEvent(date: Date(), audioSeconds: secs)) }
             var cleaned = TextCleaner.clean(raw)
             guard !cleaned.isEmpty else { return }
             if useAI { cleaned = Cloud.useLLM ? await cloudPolisher.polish(cleaned) : await polisher.polish(cleaned) }

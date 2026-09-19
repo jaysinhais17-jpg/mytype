@@ -217,6 +217,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private var pages: [NSView] = []
     private let content = NSView()
     private var timer: Timer?
+    private var selectedPage = 0
+    private var usageCells: [[NSTextField]] = []
+    private let dgRateField = NSTextField(), inRateField = NSTextField(), outRateField = NSTextField()
 
     private static let presets: [(String, String, String)] = [
         ("Gemini", "https://generativelanguage.googleapis.com/v1beta/openai", "gemini-flash-lite-latest"),
@@ -252,7 +255,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         window.isReleasedWhenClosed = false
         super.init()
 
-        pages = [buildHome(), buildDictionary(), buildSettings()]
+        pages = [buildHome(), buildDictionary(), buildUsage(), buildSettings()]
         let root = Surface(fill: Theme.bg, radius: 0)
         window.contentView = root
         let side = buildSidebar()
@@ -368,7 +371,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let brand = NSStackView(views: [logo, makeLabel("MyType", size: 17, weight: .bold)])
         brand.spacing = 9; brand.alignment = .centerY
 
-        let items = [("Home", "house"), ("Dictionary", "character.book.closed"), ("Settings", "gearshape")]
+        let items = [("Home", "house"), ("Dictionary", "character.book.closed"), ("Usage", "dollarsign.circle"), ("Settings", "gearshape")]
         nav = items.enumerated().map { i, it in
             let b = NavButton(title: it.0, symbol: it.1)
             b.tag = i; b.target = self; b.action = #selector(navTapped(_:))
@@ -395,6 +398,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     @objc private func navTapped(_ b: NavButton) { select(b.tag) }
 
     private func select(_ i: Int) {
+        selectedPage = i
+        if i == 2 { reloadUsage() }
         for (n, b) in nav.enumerated() { b.isSelected = n == i }
         content.subviews.forEach { $0.removeFromSuperview() }
         pin(pages[i], in: content)
@@ -481,6 +486,47 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         return page([pageHeader("Dictionary", "Names, drugs and jargon MyType should always spell right."), c])
     }
 
+    private static let usagePeriods = ["Today", "This month", "All time"]
+    private static let usageColumns = ["", "Dictations", "Audio", "Speech", "Cleanup tokens", "Cleanup", "Total"]
+
+    private func buildUsage() -> NSView {
+        var rows: [[NSView]] = [MainWindow.usageColumns.map { makeLabel($0, size: 11, weight: .semibold, color: .secondaryLabelColor) }]
+        usageCells = []
+        for p in MainWindow.usagePeriods {
+            let cells = (0..<6).map { i in makeLabel("–", size: 13, weight: i == 5 ? .bold : .regular) }
+            usageCells.append(cells)
+            rows.append([makeLabel(p, size: 13, weight: .medium)] + cells)
+        }
+        let grid = NSGridView(views: rows)
+        grid.rowSpacing = 12; grid.columnSpacing = 22
+        let table = card([sectionTitle("Running cost"), grid,
+                          makeLabel("Speech = Deepgram, billed by audio streamed. Cleanup = your cleanup model, billed by tokens. These are estimates from the rates below, not your provider's invoice. Skipped or failed calls cost nothing here.",
+                                    size: 11, color: .secondaryLabelColor, wrap: true)])
+        let rates = card([
+            sectionTitle("Rates (USD)"),
+            settingRow("Speech, per minute", "Deepgram Nova-3 streaming was about $0.0077/min when I set this up.",
+                       field(dgRateField, placeholder: "0.0077", value: String(Usage.deepgramPerMinute), width: 90)),
+            settingRow("Cleanup input, per 1M tokens", nil, field(inRateField, placeholder: "0.29", value: String(Usage.llmInPerMillion), width: 90)),
+            settingRow("Cleanup output, per 1M tokens", "Defaults are a rough guess for Groq's Qwen models. Check your provider's pricing page and edit.",
+                       field(outRateField, placeholder: "0.59", value: String(Usage.llmOutPerMillion), width: 90)),
+        ])
+        return page([pageHeader("Usage", "What your API keys are costing, tracked on this Mac."), table, rates])
+    }
+
+    func reloadUsage() {
+        let evs = Usage.events()
+        let cal = Calendar.current, now = Date()
+        let since: [Date?] = [cal.startOfDay(for: now), cal.dateInterval(of: .month, for: now)?.start, nil]
+        func usd(_ v: Double) -> String { v < 0.1 ? String(format: "$%.4f", v) : String(format: "$%.2f", v) }
+        func k(_ n: Int) -> String { n >= 10_000 ? String(format: "%.1fk", Double(n) / 1000) : String(n) }
+        for (i, s) in since.enumerated() {
+            let t = Usage.totals(evs, since: s)
+            let vals = ["\(t.dictations)", String(format: "%.1f min", t.audioSeconds / 60), usd(t.speechCost),
+                        "\(k(t.promptTokens)) in / \(k(t.completionTokens)) out", usd(t.cleanupCost), usd(t.total)]
+            for (c, v) in vals.enumerated() { usageCells[i][c].stringValue = v }
+        }
+    }
+
     private func buildSettings() -> NSView {
         for (sw, sel) in [(aiSwitch, #selector(toggleAI)), (langSwitch, #selector(toggleLang)), (loginSwitch, #selector(toggleLogin))] {
             sw.target = self; sw.action = sel
@@ -554,6 +600,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     func refresh() {
+        if selectedPage == 2 { reloadUsage() }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let ax = AXIsProcessTrusted(), input = CGPreflightListenEventAccess()
         micRow.set(ok: mic); axRow.set(ok: ax); inputRow.set(ok: input)
@@ -573,12 +620,16 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         Cloud.llmKey = llmKeyField.stringValue
         Cloud.llmBaseURL = llmURLField.stringValue
         Cloud.llmModel = llmModelField.stringValue
+        if let v = Double(dgRateField.stringValue) { Usage.deepgramPerMinute = v }
+        if let v = Double(inRateField.stringValue) { Usage.llmInPerMillion = v }
+        if let v = Double(outRateField.stringValue) { Usage.llmOutPerMillion = v }
         app.refreshAI()
         refresh()
+        if selectedPage == 2 { reloadUsage() }
     }
     func textDidEndEditing(_ notification: Notification) { saveDict() }
 
-    @objc private func openSettings() { select(2) }
+    @objc private func openSettings() { select(3) }
     @objc private func pickPreset() {
         let i = presetPopup.indexOfSelectedItem - 1
         guard i >= 0 else { return }

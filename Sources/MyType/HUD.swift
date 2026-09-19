@@ -1,11 +1,11 @@
 import AppKit
 
-/// Small floating mic at the bottom of the screen: ripples that swell with your voice while listening, a spinning ring while working.
+/// Small floating mic at the bottom of the screen: a still purple disc when quiet that swells, glows and spins a white comet as you speak, and a spinning ring while working.
 final class HUD {
     enum Mode { case hidden, listening, working }
 
     private let panel: NSPanel
-    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 240, height: 240))
+    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 150, height: 150))
 
     init() {
         panel = NSPanel(contentRect: view.frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -43,24 +43,27 @@ final class HUD {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
         let f = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2, y: f.minY - 45))
+        panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2, y: f.minY - 18))
     }
 }
 
 private final class HUDView: NSView {
     var mode: HUD.Mode = .hidden { didSet { needsDisplay = true; updateTimer() } }
-    private var energy: CGFloat = 0   // instantaneous voice level, decays between audio buffers
-    private var smooth: CGFloat = 0   // eased copy of `energy`, drives the swelling
+    private var target: CGFloat = 0   // latest voice level (0...1), decays between audio buffers
+    private var smooth: CGFloat = 0   // low-passed copy of `target`; everything animated follows this, so nothing steps
+    private var comet: CGFloat = 0    // comet visibility, eased
     private var spin: CGFloat = 0     // comet angle in degrees; only advances while there is voice
+    private var ripple: CGFloat = 0   // integrated ripple clock (never jumps when the voice level changes)
+    private var lastTick = CACurrentMediaTime()
     private var timer: Timer?
-    private var phase: CGFloat = 0
     private var introStart = Date()
 
     private let bright = NSColor(red: 0.55, green: 0.36, blue: 0.98, alpha: 1)
     private let lavender = NSColor(red: 0.86, green: 0.80, blue: 1.0, alpha: 1)
+    private let iconScale: CGFloat = 3 // rendered at 3x and drawn smaller so it stays crisp when the disc swells
     private lazy var micIcon: NSImage? = {
         guard let base = NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)?
-            .withSymbolConfiguration(.init(pointSize: 17, weight: .semibold)) else { return nil }
+            .withSymbolConfiguration(.init(pointSize: 17 * iconScale, weight: .semibold)) else { return nil }
         return NSImage(size: base.size, flipped: false) { [lavender] rect in
             base.draw(in: rect)
             lavender.set()
@@ -73,26 +76,39 @@ private final class HUDView: NSView {
 
     func restartIntro() {
         introStart = Date()
-        energy = 0; smooth = 0
+        target = 0; smooth = 0; comet = 0; ripple = 0
+        lastTick = CACurrentMediaTime()
     }
 
     func push(level v: Float) {
-        // Speech RMS is small; boost and compress so quiet talkers still move the ripples.
-        energy = max(energy, min(1, CGFloat(v) * 14).squareRoot())
+        // Speech RMS is small; boost and compress so quiet talkers still move the disc.
+        target = max(target, min(1, CGFloat(v) * 14).squareRoot())
     }
 
     private func updateTimer() {
         timer?.invalidate(); timer = nil
         guard mode != .hidden else { return }
-        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in
-            guard let self else { return }
-            self.phase += 0.09
-            self.energy *= 0.89
-            self.smooth += (self.energy - self.smooth) * 0.4
-            self.spin += self.mode == .working ? 5 : self.smooth * 9
-            self.needsDisplay = true
-        }
+        lastTick = CACurrentMediaTime()
+        timer = Timer.scheduledTimer(withTimeInterval: 1.0 / 60.0, repeats: true) { [weak self] _ in self?.tick() }
         RunLoop.main.add(timer!, forMode: .common)
+    }
+
+    /// Frame-rate independent smoothing: fast attack, gentler release.
+    private func follow(_ value: inout CGFloat, to goal: CGFloat, attack: CGFloat, release: CGFloat, dt: CGFloat) {
+        let tau = goal > value ? attack : release
+        value += (goal - value) * (1 - exp(-dt / tau))
+    }
+
+    private func tick() {
+        let now = CACurrentMediaTime()
+        let dt = CGFloat(min(0.05, now - lastTick)); lastTick = now
+        target *= exp(-dt / 0.22)
+        follow(&smooth, to: target, attack: 0.07, release: 0.20, dt: dt)
+        let speaking = mode == .listening
+        follow(&comet, to: mode == .working ? 1 : (speaking ? min(1, smooth * 3) : 0), attack: 0.12, release: 0.25, dt: dt)
+        spin += (mode == .working ? 300 : 90 + 330 * smooth) * comet * dt
+        ripple += dt * (0.35 + 0.9 * smooth)
+        needsDisplay = true
     }
 
     private func easeOutBack(_ t: CGFloat) -> CGFloat {
@@ -105,14 +121,14 @@ private final class HUDView: NSView {
         let t = CGFloat(Date().timeIntervalSince(introStart))
         let pop = max(0.01, easeOutBack(t / 0.30))
         let working = mode == .working
-        let e = working ? 0 : smooth
+        let e = mode == .listening ? smooth : 0        // voice level
+        let glow = working ? 0.35 : e                  // purple illumination: none when quiet
         let c = CGPoint(x: bounds.midX, y: bounds.midY)
         let r: CGFloat = 19
 
         ctx.saveGState()
         ctx.translateBy(x: c.x, y: c.y)
-        // The whole mic nearly doubles with each word and shrinks below its resting size in silence.
-        let grow = pop * (working ? 1 : 0.72 + 1.2 * e)
+        let grow = pop * (1 + 0.3 * e)                 // the whole mic swells with your voice
         ctx.scaleBy(x: grow, y: grow)
         ctx.translateBy(x: -c.x, y: -c.y)
 
@@ -120,47 +136,46 @@ private final class HUDView: NSView {
             NSBezierPath(ovalIn: NSRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2))
         }
 
-        // Ripples: tiny and faint in silence, wide and bright when you speak.
-        if !working {
+        // Ripples exist only while there is voice.
+        if e > 0.02 {
             for k in 0..<3 {
-                let p = (phase * (0.12 + 0.2 * e) + CGFloat(k) / 3).truncatingRemainder(dividingBy: 1)
-                let ring = circle(r + 2 + p * (4 + 26 * e))
-                ring.lineWidth = 1.4 + 1.6 * e
-                bright.withAlphaComponent((1 - p) * (0.06 + 0.7 * e)).setStroke()
+                let p = (ripple + CGFloat(k) / 3).truncatingRemainder(dividingBy: 1)
+                let ring = circle(r + 2 + p * (6 + 24 * e))
+                ring.lineWidth = 1.2 + 1.6 * e
+                bright.withAlphaComponent((1 - p) * (1 - p) * 0.8 * min(1, e * 1.6)).setStroke()
                 ring.stroke()
             }
         }
 
-        // Body: black disc with a glowing purple outline.
-        let pulse = 0.5 + 0.5 * sin(phase * 0.9)
+        // Body: black disc with a solid purple outline that lights up with your voice.
         ctx.saveGState()
-        ctx.setShadow(offset: .zero, blur: 5 + 5 * pulse + 18 * e, color: bright.withAlphaComponent(0.35 + 0.2 * pulse + 0.45 * e).cgColor)
+        if glow > 0.01 {
+            ctx.setShadow(offset: .zero, blur: 4 + 22 * glow, color: bright.withAlphaComponent(min(1, 0.85 * glow + 0.1)).cgColor)
+        }
         NSColor(red: 0.03, green: 0.03, blue: 0.05, alpha: 1).setFill()
         circle(r).fill()
         ctx.restoreGState()
         let edge = circle(r - 1)
         edge.lineWidth = 2
-        bright.withAlphaComponent(0.6 + 0.4 * pulse).setStroke()
+        bright.blended(withFraction: 0.35 * glow, of: NSColor(red: 0.72, green: 0.58, blue: 1, alpha: 1))?.setStroke()
         edge.stroke()
 
-        // The white comet stays put and hidden until you speak; it circles while there is voice (and while working).
-        let cometAlpha = working ? 1 : min(1, smooth * 4)
-        if cometAlpha > 0.01 {
-            let steps = 16
+        // The white comet is hidden and still until you speak, then circles faster the louder you are.
+        if comet > 0.01 {
+            let steps = 40
             for i in 0..<steps {
-                let a = -spin + CGFloat(i) * 5
+                let a = -spin + CGFloat(i) * 2
                 let arc = NSBezierPath()
-                arc.appendArc(withCenter: c, radius: r - 1, startAngle: a, endAngle: a + 6.5, clockwise: false)
+                arc.appendArc(withCenter: c, radius: r - 1, startAngle: a, endAngle: a + 2.6, clockwise: false)
                 arc.lineWidth = 2.6
                 arc.lineCapStyle = .round
-                lavender.withAlphaComponent(pow(1 - CGFloat(i) / CGFloat(steps), 1.6) * cometAlpha).setStroke()
+                lavender.withAlphaComponent(pow(1 - CGFloat(i) / CGFloat(steps), 1.6) * comet).setStroke()
                 arc.stroke()
             }
         }
 
         if let icon = micIcon {
-            let k = 1 + 0.14 * e
-            let w = icon.size.width * k, h = icon.size.height * k
+            let w = icon.size.width / iconScale, h = icon.size.height / iconScale
             icon.draw(in: NSRect(x: c.x - w / 2, y: c.y - h / 2, width: w, height: h),
                       from: .zero, operation: .sourceOver, fraction: working ? 0.55 : 1)
         }
