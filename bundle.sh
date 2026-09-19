@@ -14,6 +14,7 @@ swiftc -O -Xcc -ivfsoverlay -Xcc "$PWD/build/vfs.json" -vfsoverlay "$PWD/build/v
 APP=build/MyType.app
 rm -rf "$APP"; mkdir -p "$APP/Contents/MacOS"
 cp build/MyType-bin "$APP/Contents/MacOS/MyType"
+mkdir -p "$APP/Contents/Resources"; cp Resources/AppIcon.icns "$APP/Contents/Resources/"
 cat > "$APP/Contents/Info.plist" <<PL
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -23,9 +24,13 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundleExecutable</key><string>MyType</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
-<key>LSUIElement</key><true/>
+<key>CFBundleIconFile</key><string>AppIcon</string>
+<key>CFBundleDisplayName</key><string>MyType</string>
+<key>NSPrincipalClass</key><string>NSApplication</string>
+<key>LSMinimumSystemVersion</key><string>13.0</string>
 <key>NSMicrophoneUsageDescription</key><string>MyType records your voice locally to transcribe it.</string>
 </dict></plist>
 PL
-codesign --force --sign - "$APP"
+# Fixed designated requirement (bundle id only) so macOS keeps privacy permissions across rebuilds.
+codesign --force --sign - -r='designated => identifier "com.jay.mytype"' "$APP"
 echo "Built $APP"

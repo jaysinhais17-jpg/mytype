@@ -10,51 +10,64 @@ final class App: NSObject, NSApplicationDelegate {
     private let polisher = Polisher()
     private let hotkey = Hotkey()
     private let hud = HUD()
+    private var window: MainWindow!
     private var recording = false
     private var locked = false // hands-free mode after a quick tap
     private var pressStart = Date()
-    private var statusLine = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
-    private var llmLine = NSMenuItem(title: "AI cleanup: loading…", action: nil, keyEquivalent: "")
-    private let aiItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleAI(_:)), keyEquivalent: "")
-    private let loginItem = NSMenuItem(title: "Launch at login", action: #selector(toggleLogin(_:)), keyEquivalent: "")
+    private let statusLine = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
+    private let llmLine = NSMenuItem(title: "AI cleanup: loading…", action: nil, keyEquivalent: "")
+    private let aiItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleAIMenu), keyEquivalent: "")
+    private let loginItem = NSMenuItem(title: "Launch at login", action: #selector(toggleLoginMenu), keyEquivalent: "")
 
-    private var aiEnabled: Bool {
+    private(set) var keySeen = false
+    var hotkeyInstalled: Bool { hotkey.installed }
+    var statusText: String { statusLine.title }
+    var llmText: String { llmLine.title }
+
+    var aiEnabled: Bool {
         get { UserDefaults.standard.object(forKey: "aiCleanup") as? Bool ?? true }
-        set { UserDefaults.standard.set(newValue, forKey: "aiCleanup") }
+        set { UserDefaults.standard.set(newValue, forKey: "aiCleanup"); aiItem.state = newValue ? .on : .off }
     }
+    var autoLanguage: Bool {
+        get { transcriber.language == "auto" }
+        set { UserDefaults.standard.set(newValue ? "auto" : "en", forKey: "language") }
+    }
+    var loginEnabled: Bool { SMAppService.mainApp.status == .enabled }
 
     func applicationDidFinishLaunching(_ n: Notification) {
         setIcon("mic.slash")
         buildMenu()
-        AVCaptureDevice.requestAccess(for: .audio) { _ in }
-        // Accessibility is required to send Cmd+V into other apps.
-        _ = AXIsProcessTrustedWithOptions([kAXTrustedCheckOptionPrompt.takeUnretainedValue(): true] as CFDictionary)
+        buildMainMenu()
+        if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
+            AVCaptureDevice.requestAccess(for: .audio) { _ in }
+        }
 
         recorder.onLevel = { [weak self] v in self?.hud.level(v) }
         hotkey.onDown = { [weak self] in self?.keyDown() }
         hotkey.onUp = { [weak self] in self?.keyUp() }
-        if !hotkey.install() {
-            statusLine.title = "Grant Input Monitoring, then relaunch"
-            NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")!)
+        hotkey.onEvent = { [weak self] _, _ in self?.keySeen = true }
+        // Keep trying until Input Monitoring is granted — no relaunch needed.
+        _ = hotkey.install()
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, !self.hotkey.installed, CGPreflightListenEventAccess() else { return }
+            _ = self.hotkey.install()
         }
 
-        if !UserDefaults.standard.bool(forKey: "welcomed") {
-            UserDefaults.standard.set(true, forKey: "welcomed")
-            DispatchQueue.main.async { self.showWelcome() }
-        }
+        window = MainWindow(app: self)
+        window.show()
 
         transcriber.startServer { [weak self] ok in
             guard let self else { return }
             self.setIcon(ok ? "mic" : "exclamationmark.triangle")
-            self.statusLine.title = ok ? "Ready — tap or hold Fn to talk" : "Server failed (brew install whisper-cpp? model present?)"
+            self.statusLine.title = ok ? "Ready" : "Speech server failed (whisper-cpp + model installed?)"
         }
 
         if Polisher.available {
             polisher.start { [weak self] ok in
-                self?.llmLine.title = ok ? "AI cleanup: ready" : "AI cleanup: failed to start"
+                self?.llmLine.title = ok ? "AI cleanup ready" : "AI cleanup failed to start"
             }
         } else {
-            llmLine.title = "AI cleanup: not installed"
+            llmLine.title = "AI cleanup not installed"
         }
     }
 
@@ -63,70 +76,70 @@ final class App: NSObject, NSApplicationDelegate {
         polisher.stop()
     }
 
+    /// Dock icon click / re-opening from Spotlight.
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        window.show()
+        return false
+    }
+
     private func setIcon(_ name: String) {
         let img = NSImage(systemSymbolName: name, accessibilityDescription: "MyType")
         statusItem.button?.image = img
-        // Fall back to text so the item is never invisible.
         statusItem.button?.title = img == nil ? "🎙" : ""
-    }
-
-    private func showWelcome() {
-        NSApp.activate(ignoringOtherApps: true)
-        let a = NSAlert()
-        a.messageText = "MyType is running"
-        a.informativeText = "It lives in the menu bar (top right of your screen) — there's no Dock icon or window.\n\nTap Fn to start/stop dictating, or hold Fn to talk. If you don't see the icon, your menu bar may be full: quit a few menu-bar apps or hold ⌘ and drag icons to make room."
-        a.addButton(withTitle: "Got it")
-        a.runModal()
-        statusItem.button?.performClick(nil)
-    }
-
-    /// Double-clicking the app (Finder/Spotlight) while it's already running.
-    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        showWelcome()
-        return false
     }
 
     private func buildMenu() {
         let m = NSMenu()
+        let open = NSMenuItem(title: "Open MyType", action: #selector(openWindow), keyEquivalent: "")
+        open.target = self
+        m.addItem(open)
+        m.addItem(.separator())
         m.addItem(statusLine)
         m.addItem(llmLine)
         m.addItem(.separator())
         aiItem.target = self; aiItem.state = aiEnabled ? .on : .off
         m.addItem(aiItem)
-        let lang = NSMenuItem(title: "Auto-detect language (restart to apply)", action: #selector(toggleLang(_:)), keyEquivalent: "")
-        lang.target = self
-        lang.state = transcriber.language == "auto" ? .on : .off
-        m.addItem(lang)
-        loginItem.target = self; loginItem.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        loginItem.target = self; loginItem.state = loginEnabled ? .on : .off
         m.addItem(loginItem)
         m.addItem(.separator())
         m.addItem(NSMenuItem(title: "Quit MyType", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = m
     }
 
-    @objc private func toggleAI(_ item: NSMenuItem) {
-        aiEnabled.toggle()
-        item.state = aiEnabled ? .on : .off
-    }
-
-    @objc private func toggleLang(_ item: NSMenuItem) {
-        let auto = transcriber.language != "auto"
-        UserDefaults.standard.set(auto ? "auto" : "en", forKey: "language")
-        item.state = auto ? .on : .off
-    }
-
-    @objc private func toggleLogin(_ item: NSMenuItem) {
-        do {
-            if SMAppService.mainApp.status == .enabled { try SMAppService.mainApp.unregister() }
-            else { try SMAppService.mainApp.register() }
-        } catch {
-            let a = NSAlert()
-            a.messageText = "Couldn't change launch-at-login"
-            a.informativeText = "\(error.localizedDescription)\n\nMove MyType.app to ~/Applications or /Applications and try again."
-            a.runModal()
+    private func buildMainMenu() {
+        let main = NSMenu()
+        func add(_ title: String, _ items: [(String, Selector, String)]) {
+            let host = NSMenuItem(); main.addItem(host)
+            let sub = NSMenu(title: title)
+            for (t, sel, key) in items {
+                if t == "-" { sub.addItem(.separator()) } else { sub.addItem(withTitle: t, action: sel, keyEquivalent: key) }
+            }
+            host.submenu = sub
         }
-        item.state = SMAppService.mainApp.status == .enabled ? .on : .off
+        add("MyType", [("Hide MyType", #selector(NSApplication.hide(_:)), "h"), ("-", #selector(NSApplication.hide(_:)), ""),
+                       ("Quit MyType", #selector(NSApplication.terminate(_:)), "q")])
+        add("Edit", [("Cut", #selector(NSText.cut(_:)), "x"), ("Copy", #selector(NSText.copy(_:)), "c"),
+                     ("Paste", #selector(NSText.paste(_:)), "v"), ("Select All", #selector(NSText.selectAll(_:)), "a")])
+        add("Window", [("Close", #selector(NSWindow.performClose(_:)), "w"), ("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m")])
+        NSApp.mainMenu = main
     }
+
+    @objc private func openWindow() { window.show() }
+    @objc private func toggleAIMenu() { aiEnabled.toggle() }
+    @objc private func toggleLoginMenu() {
+        _ = setLogin(!loginEnabled)
+        loginItem.state = loginEnabled ? .on : .off
+    }
+
+    /// Returns an error description on failure.
+    func setLogin(_ on: Bool) -> String? {
+        do {
+            if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+            return nil
+        } catch { return error.localizedDescription }
+    }
+
+    // MARK: recording
 
     /// Tap Fn = start/stop hands-free. Hold Fn = push-to-talk.
     private func keyDown() {
@@ -140,6 +153,9 @@ final class App: NSObject, NSApplicationDelegate {
         guard recording, !locked else { return }
         if Date().timeIntervalSince(pressStart) < Config.tapSeconds { locked = true } else { finish() }
     }
+
+    func beginManual() { if !recording { begin() } }
+    func finishManual() { locked = false; finish() }
 
     private func begin() {
         guard transcriber.ready, !recording else { return }
@@ -168,10 +184,16 @@ final class App: NSObject, NSApplicationDelegate {
         Task {
             defer { DispatchQueue.main.async { self.setIcon("mic"); self.hud.set(.hidden) } }
             guard let raw = try? await transcriber.transcribe(trimmed) else { return }
-            var text = TextCleaner.clean(raw)
-            guard !text.isEmpty else { return }
-            if useAI { text = await polisher.polish(text) }
-            await MainActor.run { Paster.paste(text) }
+            var cleaned = TextCleaner.clean(raw)
+            guard !cleaned.isEmpty else { return }
+            if useAI { cleaned = await polisher.polish(cleaned) }
+            let text = cleaned
+            await MainActor.run {
+                // Inside our own window, type straight into the "Try it" box.
+                if NSApp.isActive && self.window.window.isKeyWindow { self.window.insertTry(text) } else { Paster.paste(text) }
+                History.add(text)
+                self.window.reloadHistory()
+            }
         }
     }
 }
@@ -179,5 +201,5 @@ final class App: NSObject, NSApplicationDelegate {
 let app = NSApplication.shared
 let delegate = App()
 app.delegate = delegate
-app.setActivationPolicy(.accessory)
+app.setActivationPolicy(.regular)
 app.run()

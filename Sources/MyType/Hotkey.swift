@@ -5,10 +5,13 @@ import CoreGraphics
 final class Hotkey {
     var onDown: (() -> Void)?
     var onUp: (() -> Void)?
+    var onEvent: ((Int64, Bool) -> Void)?
     private var tap: CFMachPort?
     private var isDown = false
+    var installed: Bool { tap != nil }
 
     func install() -> Bool {
+        if tap != nil { return true }
         let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
         let cb: CGEventTapCallBack = { _, type, event, refcon in
             let me = Unmanaged<Hotkey>.fromOpaque(refcon!).takeUnretainedValue()
@@ -23,6 +26,7 @@ final class Hotkey {
             case 61: pressed = event.flags.contains(.maskAlternate)     // Right Option
             default: return Unmanaged.passUnretained(event)
             }
+            DispatchQueue.main.async { me.onEvent?(code, pressed) }
             if pressed && !me.isDown { me.isDown = true; DispatchQueue.main.async { me.onDown?() } }
             else if !pressed && me.isDown { me.isDown = false; DispatchQueue.main.async { me.onUp?() } }
             return Unmanaged.passUnretained(event)
