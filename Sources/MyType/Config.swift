@@ -24,7 +24,7 @@ enum Config {
             .first { FileManager.default.isExecutableFile(atPath: $0) }
     }
 
-    static let defaultDictionary = "OSCE, urology, uroradiology, nephrolithiasis, hydronephrosis, cystoscopy, paediatrics, obstetrics, gynaecology"
+    static let defaultDictionary = "OSCE, urology, uroradiology, nephrolithiasis, hydronephrosis, cystoscopy, paediatrics, obstetrics, gynaecology, MyType, Wispr Flow, Typeless, Deepgram, Gemini, Vertex AI, hands-free, push-to-talk"
     static var dictionary: String {
         get { UserDefaults.standard.string(forKey: "dictionary") ?? defaultDictionary }
         set { UserDefaults.standard.set(newValue, forKey: "dictionary") }

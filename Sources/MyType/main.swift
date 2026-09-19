@@ -192,6 +192,7 @@ final class App: NSObject, NSApplicationDelegate {
         do {
             try recorder.start()
             recording = true
+            if Cloud.aiReady { CloudPolisher.warm() }
             if Cloud.useDeepgram {
                 let d = DeepgramSession(recorder: recorder)
                 d.start(language: transcriber.language == "auto" ? "multi" : "en")
