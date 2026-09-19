@@ -51,6 +51,7 @@ final class App: NSObject, NSApplicationDelegate {
             AVCaptureDevice.requestAccess(for: .audio) { _ in }
         }
 
+        _ = Net.online // start watching the connection
         recorder.onLevel = { [weak self] v in self?.hud.level(v) }
         hotkey.onDown = { [weak self] in self?.keyDown() }
         hotkey.onUp = { [weak self] in self?.keyUp() }
@@ -193,7 +194,7 @@ final class App: NSObject, NSApplicationDelegate {
             try recorder.start()
             recording = true
             if Cloud.aiReady { CloudPolisher.warm() }
-            if Cloud.useDeepgram {
+            if Cloud.useDeepgram && Net.online {
                 let d = DeepgramSession(recorder: recorder)
                 d.start(language: transcriber.language == "auto" ? "multi" : "en")
                 deepgram = d
@@ -244,12 +245,15 @@ final class App: NSObject, NSApplicationDelegate {
             if engine == "deepgram" { Usage.add(UsageEvent(date: Date(), audioSeconds: secs)) }
             var cleaned = TextCleaner.clean(raw)
             guard !cleaned.isEmpty else { return }
-            if useAI { cleaned = Cloud.useLLM ? await cloudPolisher.polish(cleaned) : await polisher.polish(cleaned) }
+            if useAI {
+                if Cloud.useLLM { if Net.online { cleaned = await cloudPolisher.polish(cleaned) } }
+                else { cleaned = await polisher.polish(cleaned) }
+            }
             let text = cleaned
             let t2 = Date()
             Log.write(String(format: "speech %.2fs (%@) · cleanup %.2fs (%@) · total %.2fs · %.1fs audio",
                              t1.timeIntervalSince(t0), engine,
-                             t2.timeIntervalSince(t1), useAI ? (Cloud.useLLM ? "cloud" : "local") : "off",
+                             t2.timeIntervalSince(t1), useAI ? (Cloud.useLLM ? (Net.online ? "cloud" : "skipped, offline") : "local") : "off",
                              t2.timeIntervalSince(t0), secs))
             await MainActor.run {
                 // Inside our own window, type straight into the "Try it" box.

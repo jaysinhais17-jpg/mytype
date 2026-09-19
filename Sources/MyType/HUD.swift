@@ -56,6 +56,7 @@ private final class HUDView: NSView {
     private var ripple: CGFloat = 0   // integrated ripple clock (never jumps when the voice level changes)
     private var breath: CGFloat = 0   // integrated breathing phase (radians); faster with louder speech, so the pulse never jerks
     private var floor: CGFloat = 0.004 // running estimate of the room's background noise
+    private var lastVoice = CACurrentMediaTime() - 10 // when the gate last heard speech
     private var lastTick = CACurrentMediaTime()
     private var timer: Timer?
     private var introStart = Date()
@@ -79,6 +80,7 @@ private final class HUDView: NSView {
     func restartIntro() {
         introStart = Date()
         target = 0; smooth = 0; comet = 0; ripple = 0; breath = 0; floor = 0.004
+        lastVoice = CACurrentMediaTime() - 10
         lastTick = CACurrentMediaTime()
     }
 
@@ -87,7 +89,8 @@ private final class HUDView: NSView {
         let x = CGFloat(v)
         if x < floor { floor = x } else { floor = min(0.02, floor + (x - floor) * 0.004) }
         let gate = max(0.012, floor * 2.5 + 0.004)
-        let act = min(1, max(0, (x - gate) / 0.07)).squareRoot()
+        let act = min(1, max(0, (x - gate) / 0.05)).squareRoot()
+        if act > 0.12 { lastVoice = CACurrentMediaTime() }
         target = max(target, act)
     }
 
@@ -109,10 +112,12 @@ private final class HUDView: NSView {
         let now = CACurrentMediaTime()
         let dt = CGFloat(min(0.05, now - lastTick)); lastTick = now
         target *= exp(-dt / 0.25)
+        // Stay lit through the small gaps between words; go quiet after about a second of silence.
+        if now - lastVoice < 1.1 { target = max(target, 0.45) }
         follow(&smooth, to: target, attack: 0.07, release: 0.20, dt: dt)
         let speaking = mode == .listening
-        follow(&comet, to: mode == .working ? 1 : (speaking ? min(1, smooth * 3) : 0), attack: 0.12, release: 0.25, dt: dt)
-        spin += (mode == .working ? 300 : 90 + 330 * smooth) * comet * dt
+        follow(&comet, to: mode == .working ? 1 : (speaking ? min(1, smooth * 5) : 0), attack: 0.08, release: 0.3, dt: dt)
+        spin += (mode == .working ? 300 : 240 + 560 * smooth) * comet * dt
         ripple += dt * (0.35 + 0.9 * smooth)
         breath += dt * 2 * .pi * (1.4 + 2.6 * smooth) // ~1.4 Hz when soft, ~4 Hz when loud
         needsDisplay = true
@@ -170,14 +175,15 @@ private final class HUDView: NSView {
 
         // The white comet is hidden and still until you speak, then circles faster the louder you are.
         if comet > 0.01 {
-            let steps = 40
+            let steps = 60
             for i in 0..<steps {
-                let a = -spin + CGFloat(i) * 2
+                let a = -spin + CGFloat(i) * 2.4
                 let arc = NSBezierPath()
-                arc.appendArc(withCenter: c, radius: r - 1, startAngle: a, endAngle: a + 2.6, clockwise: false)
-                arc.lineWidth = 2.6
+                arc.appendArc(withCenter: c, radius: r - 1, startAngle: a, endAngle: a + 3, clockwise: false)
+                arc.lineWidth = 3.4
                 arc.lineCapStyle = .round
-                lavender.withAlphaComponent(pow(1 - CGFloat(i) / CGFloat(steps), 1.6) * comet).setStroke()
+                NSColor.white.blended(withFraction: CGFloat(i) / CGFloat(steps), of: lavender)!
+                    .withAlphaComponent(pow(1 - CGFloat(i) / CGFloat(steps), 1.2) * comet).setStroke()
                 arc.stroke()
             }
         }

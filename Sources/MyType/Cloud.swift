@@ -1,4 +1,17 @@
 import Foundation
+import Network
+
+/// Live network state, so with no connection we go straight to the on-device models instead of waiting for cloud timeouts.
+enum Net {
+    private static var path = true
+    private static let monitor: NWPathMonitor = {
+        let m = NWPathMonitor()
+        m.pathUpdateHandler = { path = $0.status == .satisfied }
+        m.start(queue: DispatchQueue(label: "mytype.net"))
+        return m
+    }()
+    static var online: Bool { _ = monitor; return path }
+}
 
 /// Optional cloud speech + cleanup. Keys live in UserDefaults on this Mac only (no Keychain prompts).
 enum Cloud {
