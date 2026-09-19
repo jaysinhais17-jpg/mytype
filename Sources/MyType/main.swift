@@ -69,16 +69,25 @@ final class App: NSObject, NSApplicationDelegate {
         transcriber.startServer { [weak self] ok in
             guard let self else { return }
             self.setIcon(ok ? "mic" : "exclamationmark.triangle")
-            self.statusLine.title = ok ? "Ready" : "Speech server failed (whisper-cpp + model installed?)"
+            self.localFailed = !ok
+            self.updateStatus()
         }
 
         refreshAI()
+    }
+
+    private var localFailed = false
+    /// Ready if either the on-device model is loaded or a Deepgram key lets us stream (so the local model is optional).
+    private func updateStatus() {
+        if transcriber.ready || Cloud.useDeepgram { statusLine.title = "Ready" }
+        else if localFailed { statusLine.title = "Add a Deepgram key in Settings (or install whisper-cpp for on-device speech)" }
     }
 
     var engineText: String { Cloud.useDeepgram ? "Speech: Deepgram" : "Speech: on-device" }
 
     /// Called at launch and whenever the toggle or cloud keys change.
     func refreshAI() {
+        updateStatus()
         if !aiEnabled { stopPolisher() }
         else if Cloud.useLLM { polisher.stop(); llmLine.title = "AI cleanup ready (cloud)" }
         else if !polisher.ready { startPolisher() }
@@ -189,7 +198,7 @@ final class App: NSObject, NSApplicationDelegate {
     func finishManual() { locked = false; finish() }
 
     private func begin(showAfter delay: TimeInterval) {
-        guard transcriber.ready, !recording else { return }
+        guard transcriber.ready || (Cloud.useDeepgram && Net.online), !recording else { return }
         do {
             try recorder.start()
             recording = true
