@@ -5,7 +5,7 @@ final class HUD {
     enum Mode { case hidden, listening, working }
 
     private let panel: NSPanel
-    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 88, height: 88))
+    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 128, height: 128))
 
     init() {
         panel = NSPanel(contentRect: view.frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -43,13 +43,15 @@ final class HUD {
         let mouse = NSEvent.mouseLocation
         let screen = NSScreen.screens.first { NSMouseInRect(mouse, $0.frame, false) } ?? NSScreen.main ?? NSScreen.screens[0]
         let f = screen.visibleFrame
-        panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2, y: f.minY + 10))
+        panel.setFrameOrigin(NSPoint(x: f.midX - view.frame.width / 2, y: f.minY - 12))
     }
 }
 
 private final class HUDView: NSView {
     var mode: HUD.Mode = .hidden { didSet { needsDisplay = true; updateTimer() } }
-    private var energy: CGFloat = 0   // smoothed voice level, 0...1
+    private var energy: CGFloat = 0   // instantaneous voice level, decays between audio buffers
+    private var smooth: CGFloat = 0   // eased copy of `energy`, drives the swelling
+    private var spin: CGFloat = 0     // comet angle in degrees; only advances while there is voice
     private var timer: Timer?
     private var phase: CGFloat = 0
     private var introStart = Date()
@@ -71,7 +73,7 @@ private final class HUDView: NSView {
 
     func restartIntro() {
         introStart = Date()
-        energy = 0
+        energy = 0; smooth = 0
     }
 
     func push(level v: Float) {
@@ -86,6 +88,8 @@ private final class HUDView: NSView {
             guard let self else { return }
             self.phase += 0.09
             self.energy *= 0.93
+            self.smooth += (self.energy - self.smooth) * 0.25
+            self.spin += self.mode == .working ? 5 : self.smooth * 9
             self.needsDisplay = true
         }
         RunLoop.main.add(timer!, forMode: .common)
@@ -101,26 +105,26 @@ private final class HUDView: NSView {
         let t = CGFloat(Date().timeIntervalSince(introStart))
         let pop = max(0.01, easeOutBack(t / 0.30))
         let working = mode == .working
-        let e = working ? 0 : energy
+        let e = working ? 0 : smooth
         let c = CGPoint(x: bounds.midX, y: bounds.midY)
         let r: CGFloat = 19
 
         ctx.saveGState()
         ctx.translateBy(x: c.x, y: c.y)
-        ctx.scaleBy(x: pop, y: pop)
+        ctx.scaleBy(x: pop * (1 + 0.32 * e), y: pop * (1 + 0.32 * e)) // the whole mic swells with your voice
         ctx.translateBy(x: -c.x, y: -c.y)
 
         func circle(_ radius: CGFloat) -> NSBezierPath {
             NSBezierPath(ovalIn: NSRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2))
         }
 
-        // Ripples drift outward and swell with your voice.
+        // Ripples: tiny and faint in silence, wide and bright when you speak.
         if !working {
-            for k in 0..<2 {
-                let p = (phase * 0.16 + CGFloat(k) * 0.5).truncatingRemainder(dividingBy: 1)
-                let ring = circle(r + 3 + p * (10 + 8 * e))
-                ring.lineWidth = 1.6
-                bright.withAlphaComponent((1 - p) * (0.18 + 0.55 * e)).setStroke()
+            for k in 0..<3 {
+                let p = (phase * (0.12 + 0.2 * e) + CGFloat(k) / 3).truncatingRemainder(dividingBy: 1)
+                let ring = circle(r + 2 + p * (4 + 30 * e))
+                ring.lineWidth = 1.4 + 1.6 * e
+                bright.withAlphaComponent((1 - p) * (0.06 + 0.7 * e)).setStroke()
                 ring.stroke()
             }
         }
@@ -128,7 +132,7 @@ private final class HUDView: NSView {
         // Body: black disc with a glowing purple outline.
         let pulse = 0.5 + 0.5 * sin(phase * 0.9)
         ctx.saveGState()
-        ctx.setShadow(offset: .zero, blur: 6 + 8 * pulse + 10 * e, color: bright.withAlphaComponent(0.4 + 0.3 * pulse + 0.3 * e).cgColor)
+        ctx.setShadow(offset: .zero, blur: 5 + 5 * pulse + 18 * e, color: bright.withAlphaComponent(0.35 + 0.2 * pulse + 0.45 * e).cgColor)
         NSColor(red: 0.03, green: 0.03, blue: 0.05, alpha: 1).setFill()
         circle(r).fill()
         ctx.restoreGState()
@@ -137,17 +141,19 @@ private final class HUDView: NSView {
         bright.withAlphaComponent(0.6 + 0.4 * pulse).setStroke()
         edge.stroke()
 
-        // A comet of light circling the outline; it spins faster while the text is being prepared.
-        let head = -phase * (working ? 90 : 42)
-        let steps = 16
-        for i in 0..<steps {
-            let a = head + CGFloat(i) * 5
-            let arc = NSBezierPath()
-            arc.appendArc(withCenter: c, radius: r - 1, startAngle: a, endAngle: a + 6.5, clockwise: false)
-            arc.lineWidth = 2.6
-            arc.lineCapStyle = .round
-            lavender.withAlphaComponent(pow(1 - CGFloat(i) / CGFloat(steps), 1.6)).setStroke()
-            arc.stroke()
+        // The white comet stays put and hidden until you speak; it circles while there is voice (and while working).
+        let cometAlpha = working ? 1 : min(1, smooth * 4)
+        if cometAlpha > 0.01 {
+            let steps = 16
+            for i in 0..<steps {
+                let a = -spin + CGFloat(i) * 5
+                let arc = NSBezierPath()
+                arc.appendArc(withCenter: c, radius: r - 1, startAngle: a, endAngle: a + 6.5, clockwise: false)
+                arc.lineWidth = 2.6
+                arc.lineCapStyle = .round
+                lavender.withAlphaComponent(pow(1 - CGFloat(i) / CGFloat(steps), 1.6) * cometAlpha).setStroke()
+                arc.stroke()
+            }
         }
 
         if let icon = micIcon {
