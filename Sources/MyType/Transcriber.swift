@@ -86,6 +86,28 @@ final class Transcriber {
 }
 
 enum TextCleaner {
+    /// Replaces spoken triggers with their saved text ("my email" -> jay@example.com).
+    static func expandSnippets(_ text: String) -> String {
+        var out = text
+        for line in Config.snippets.split(separator: "\n") {
+            guard let eq = line.firstIndex(of: "=") else { continue }
+            let trigger = line[..<eq].trimmingCharacters(in: .whitespaces)
+            let value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+            guard !trigger.isEmpty, !value.isEmpty else { continue }
+            let esc = NSRegularExpression.escapedPattern(for: trigger)
+            let whole = out.range(of: "^\\s*\(esc)[.!?,]?\\s*$", options: [.regularExpression, .caseInsensitive]) != nil
+            out = out.replacingOccurrences(of: "(?i)\\b\(esc)\\b" + (whole ? "[.!?,]?" : ""),
+                                           with: NSRegularExpression.escapedTemplate(for: value), options: .regularExpression)
+        }
+        return out
+    }
+
+    /// True when the whole utterance is a command to remove what was just typed.
+    static func isUndoCommand(_ raw: String) -> Bool {
+        let t = raw.lowercased().trimmingCharacters(in: CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines))
+        return ["scratch that", "delete that", "undo that", "undo", "never mind"].contains(t)
+    }
+
     private static let hallucinations: Set<String> = [
         "thank you.", "thanks for watching.", "thanks for watching!", "you", "bye.", "thank you for watching.",
         "[blank_audio]", "(silence)", "[silence]", ".",

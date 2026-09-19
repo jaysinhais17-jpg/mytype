@@ -253,13 +253,17 @@ final class App: NSObject, NSApplicationDelegate {
             } else { raw = await streamer.finish(allSamples: samples) }
             let t1 = Date()
             if engine == "deepgram" { Usage.add(UsageEvent(date: Date(), audioSeconds: secs)) }
+            if TextCleaner.isUndoCommand(raw) {
+                await MainActor.run { if !(NSApp.isActive && self.window.window.isKeyWindow) { Paster.undo() } }
+                return
+            }
             var cleaned = TextCleaner.clean(raw)
             guard !cleaned.isEmpty else { return }
             if useAI {
                 if Cloud.useLLM { if Net.online { cleaned = await cloudPolisher.polish(cleaned) } }
                 else { cleaned = await polisher.polish(cleaned) }
             }
-            let text = cleaned
+            let text = TextCleaner.expandSnippets(cleaned)
             let t2 = Date()
             Log.write(String(format: "speech %.2fs (%@) · cleanup %.2fs (%@) · total %.2fs · %.1fs audio",
                              t1.timeIntervalSince(t0), engine,

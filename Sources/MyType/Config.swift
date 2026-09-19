@@ -31,4 +31,10 @@ enum Config {
         get { UserDefaults.standard.string(forKey: "dictionary") ?? defaultDictionary }
         set { UserDefaults.standard.set(newValue, forKey: "dictionary") }
     }
+
+    /// Spoken shortcuts, one "trigger = text" per line.
+    static var snippets: String {
+        get { UserDefaults.standard.string(forKey: "snippets") ?? "" }
+        set { UserDefaults.standard.set(newValue, forKey: "snippets") }
+    }
 }

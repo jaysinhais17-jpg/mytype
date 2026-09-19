@@ -205,6 +205,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let tryView = NSTextView()
     private let historyStack = NSStackView()
     private let dictView = NSTextView()
+    private let snipView = NSTextView()
     private let aiSwitch = PurpleSwitch(), langSwitch = PurpleSwitch(), loginSwitch = PurpleSwitch()
     private let dgField = NSSecureTextField(), llmKeyField = NSSecureTextField()
     private let llmURLField = NSTextField(), llmModelField = NSTextField()
@@ -485,7 +486,29 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let saveRow = NSStackView(views: [makeLabel("Separate words with commas. Saved automatically when you click away.", size: 12, color: .secondaryLabelColor), save])
         saveRow.alignment = .centerY
         let c = card([sectionTitle("Your words"), box, saveRow], spacing: 12)
-        return page([pageHeader("Dictionary", "Names, drugs and jargon MyType should always spell right."), c])
+
+        snipView.string = Config.snippets
+        snipView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        snipView.drawsBackground = false
+        snipView.insertionPointColor = Theme.purple
+        snipView.textContainerInset = NSSize(width: 8, height: 10)
+        snipView.isAutomaticQuoteSubstitutionEnabled = false
+        snipView.isAutomaticDashSubstitutionEnabled = false
+        snipView.isVerticallyResizable = true
+        snipView.autoresizingMask = [.width]
+        snipView.textContainer?.widthTracksTextView = true
+        snipView.delegate = self
+        let ssv = NSScrollView()
+        ssv.documentView = snipView
+        ssv.drawsBackground = false
+        ssv.hasVerticalScroller = true
+        ssv.translatesAutoresizingMaskIntoConstraints = false
+        ssv.heightAnchor.constraint(equalToConstant: 120).isActive = true
+        let sbox = Surface(fill: Theme.field, stroke: Theme.line, radius: 10)
+        pin(ssv, in: sbox, top: 2, leading: 2, trailing: 2, bottom: 2)
+        let snipHint = makeLabel("One per line, like:  my email = jay@example.com. Say the words on the left and the text on the right is typed instead.", size: 12, color: .secondaryLabelColor, wrap: true)
+        let sc = card([sectionTitle("Snippets"), sbox, snipHint], spacing: 12)
+        return page([pageHeader("Dictionary", "Names, drugs and jargon MyType should always spell right."), c, sc])
     }
 
     private static let usagePeriods = ["Today", "This month", "All time"]
@@ -649,7 +672,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         llmModelField.stringValue = MainWindow.presets[i].2
         controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
     }
-    @objc private func saveDict() { Config.dictionary = dictView.string }
+    @objc private func saveDict() { Config.dictionary = dictView.string; Config.snippets = snipView.string }
     @objc private func toggleCleanupFree() { Usage.cleanupFree = cleanupFreeSwitch.isOn; reloadUsage() }
     @objc private func toggleAI() { app.aiEnabled = aiSwitch.isOn }
     @objc private func toggleLang() { app.autoLanguage = langSwitch.isOn }
