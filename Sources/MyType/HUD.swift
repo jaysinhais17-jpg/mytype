@@ -5,7 +5,7 @@ final class HUD {
     enum Mode { case hidden, listening, working }
 
     private let panel: NSPanel
-    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 168, height: 48))
+    private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 184, height: 64))
 
     init() {
         panel = NSPanel(contentRect: view.frame, styleMask: [.borderless, .nonactivatingPanel],
@@ -13,7 +13,7 @@ final class HUD {
         panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
-        panel.hasShadow = true
+        panel.hasShadow = false // the purple glow is drawn in the view
         panel.ignoresMouseEvents = true
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
@@ -54,7 +54,6 @@ private final class HUDView: NSView {
     private var phase: CGFloat = 0
     private var introStart = Date()
 
-    private let deep = NSColor(red: 0.29, green: 0.16, blue: 0.62, alpha: 1)
     private let bright = NSColor(red: 0.55, green: 0.36, blue: 0.98, alpha: 1)
     private let lavender = NSColor(red: 0.86, green: 0.80, blue: 1.0, alpha: 1)
     private lazy var micIcon: NSImage? = {
@@ -108,7 +107,7 @@ private final class HUDView: NSView {
         let pop = easeOutBack(t / 0.28)              // circle springs in
         let morph = easeInOut((t - 0.30) / 0.35)     // then stretches into the bar pill
         let h: CGFloat = 40
-        let w = h + (bounds.width - 8 - h) * morph
+        let w = h + (bounds.width - 24 - h) * morph
         let breathe = mode == .listening ? 1 + 0.02 * sin(phase * 2) : 1
         let scale = max(0.01, pop) * breathe
 
@@ -120,8 +119,20 @@ private final class HUDView: NSView {
 
         let rect = NSRect(x: bounds.midX - w / 2, y: bounds.midY - h / 2, width: w, height: h)
         let pill = NSBezierPath(roundedRect: rect, xRadius: h / 2, yRadius: h / 2)
-        NSGradient(starting: bright, ending: deep)?.draw(in: pill, angle: -60)
-        NSColor(white: 1, alpha: 0.22).setStroke(); pill.lineWidth = 1; pill.stroke()
+        NSColor(red: 0.03, green: 0.03, blue: 0.05, alpha: 1).setFill()
+        pill.fill()
+
+        // Purple outline that pulses slowly while the pill is on screen.
+        let pulse = 0.5 + 0.5 * sin(phase * 0.9)
+        let lineW: CGFloat = 1.8 + 0.7 * pulse
+        let frame = NSBezierPath(roundedRect: rect.insetBy(dx: lineW / 2, dy: lineW / 2),
+                                 xRadius: (h - lineW) / 2, yRadius: (h - lineW) / 2)
+        frame.lineWidth = lineW
+        ctx.saveGState()
+        ctx.setShadow(offset: .zero, blur: 5 + 9 * pulse, color: bright.withAlphaComponent(0.35 + 0.45 * pulse).cgColor)
+        bright.withAlphaComponent(0.65 + 0.35 * pulse).setStroke()
+        frame.stroke()
+        ctx.restoreGState()
 
         // Mic icon fades out as the bars take over.
         let micAlpha = max(0, 1 - morph * 1.6)
