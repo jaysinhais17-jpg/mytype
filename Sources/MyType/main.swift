@@ -6,7 +6,7 @@ import ServiceManagement
 final class App: NSObject, NSApplicationDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let recorder = Recorder()
-    private let transcriber = Transcriber()
+    let transcriber = Transcriber()
     private let polisher = Polisher()
     private let cloudPolisher = CloudPolisher()
     private var deepgram: DeepgramSession?
@@ -50,6 +50,7 @@ final class App: NSObject, NSApplicationDelegate {
     var loginEnabled: Bool { SMAppService.mainApp.status == .enabled }
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        if InstallCheck.offerMove() { return }
         setIcon("mic.slash")
         buildMenu()
         rebuildRecent()

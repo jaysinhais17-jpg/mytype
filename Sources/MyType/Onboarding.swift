@@ -359,11 +359,17 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         if !checking { refreshNextTitle() }
     }
 
+    private var permissionsGranted: Bool {
+        AVCaptureDevice.authorizationStatus(for: .audio) == .authorized && AXIsProcessTrusted() && CGPreflightListenEventAccess()
+    }
+
     private func refreshNextTitle() {
         switch step {
         case 0: nextButton.title = "Get started"
-        case 1: nextButton.title = dgField.stringValue.trimmingCharacters(in: .whitespaces).isEmpty ? "Skip" : "Continue"
+        case 1: nextButton.title = dgField.stringValue.trimmingCharacters(in: .whitespaces).isEmpty && app.transcriber.ready ? "Skip" : "Continue"
         case 2: nextButton.title = llmField.stringValue.trimmingCharacters(in: .whitespaces).isEmpty ? "Skip" : "Continue"
+        case 3: nextButton.title = permissionsGranted ? "Continue" : "Continue anyway"
+        case 4: nextButton.title = app.keySeen ? "Continue" : "Continue anyway"
         case 5: nextButton.title = "Finish"
         default: nextButton.title = "Continue"
         }
@@ -398,6 +404,11 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             if deepgram { Cloud.deepgramKey = key }
             else { Cloud.llmKey = key; if !key.isEmpty { Cloud.llmBaseURL = Onboarding.groqBase; Cloud.llmModel = Onboarding.groqModel } }
             app.refreshAI(); main.reloadKeyFields()
+        }
+        if key.isEmpty && deepgram && !app.transcriber.ready {
+            status.stringValue = "MyType needs this key to turn your voice into text. It's free to get."
+            status.textColor = .systemOrange
+            return
         }
         guard !key.isEmpty else { store(); go(step + 1); return }
         checking = true

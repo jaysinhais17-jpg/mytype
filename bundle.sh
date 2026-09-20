@@ -24,6 +24,7 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundleExecutable</key><string>MyType</string>
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>${VERSION:-1.0}</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleDisplayName</key><string>MyType</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>

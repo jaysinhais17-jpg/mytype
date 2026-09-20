@@ -892,7 +892,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let setupBtn = PillButton(title: "Open setup guide", primary: false)
         setupBtn.target = self; setupBtn.action = #selector(runSetup)
         let perms = card([sectionTitle("Permissions", symbol: "lock.shield")] + spaced([micRow.view, axRow.view, inputRow.view, keyRow.view]) + [setupBtn], spacing: 14)
-        return page([pageHeader("Settings", "Speech, cleanup and permissions."), speech, general, perms])
+        let ver = makeLabel("MyType \(InstallCheck.version)", size: 12, color: .tertiaryLabelColor)
+        return page([pageHeader("Settings", "Speech, cleanup and permissions."), speech, general, perms, ver])
     }
 
     // MARK: actions
