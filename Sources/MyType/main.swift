@@ -86,7 +86,8 @@ final class App: NSObject, NSApplicationDelegate {
 
         transcriber.startServer { [weak self] ok in
             guard let self else { return }
-            self.setIcon(ok ? "mic" : "exclamationmark.triangle")
+            // The on-device model is optional: with a Deepgram key the app is fine, so keep the normal mic icon.
+            self.setIcon(ok || Cloud.useDeepgram ? "mic" : "exclamationmark.triangle")
             self.localFailed = !ok
             self.updateStatus()
         }
@@ -258,8 +259,25 @@ final class App: NSObject, NSApplicationDelegate {
     func beginManual() { if !recording { begin(showAfter: 0) } }
     func finishManual() { locked = false; finish() }
 
+    /// Dictation couldn't start: say so (sound + warning icon that resets itself) instead of failing silently.
+    private func startFailed(showWindow: Bool) {
+        NSSound(named: "Basso")?.play()
+        setIcon("exclamationmark.triangle")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self, !self.recording else { return }
+            self.setIcon("mic")
+        }
+        if showWindow { window?.show() }
+    }
+
     private func begin(showAfter delay: TimeInterval) {
-        guard transcriber.ready || (Cloud.useDeepgram && Net.online), !recording else { return }
+        guard !recording else { return }
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .denied, .restricted: startFailed(showWindow: true); return
+        case .notDetermined: AVCaptureDevice.requestAccess(for: .audio) { _ in }; return
+        default: break
+        }
+        guard transcriber.ready || (Cloud.useDeepgram && Net.online) else { startFailed(showWindow: !Cloud.useDeepgram); return }
         do {
             try recorder.start()
             recording = true
@@ -281,7 +299,7 @@ final class App: NSObject, NSApplicationDelegate {
             }
             hudWork = show
             if delay == 0 { show.perform() } else { DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: show) }
-        } catch { setIcon("exclamationmark.triangle") }
+        } catch { startFailed(showWindow: false) }
     }
 
     private func cancelRecording() {
