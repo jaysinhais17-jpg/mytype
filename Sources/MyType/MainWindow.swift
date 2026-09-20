@@ -368,7 +368,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         window.isReleasedWhenClosed = false
         super.init()
 
-        pages = [buildHome(), buildHistory(), buildDictionary(), buildUsage(), buildSettings()]
+        pages = [buildHome(), buildUsage(), buildDictionary(), buildHistory(), buildSettings()]
         let root = Surface(fill: Theme.bg, radius: 0)
         window.contentView = root
         let side = buildSidebar()
@@ -506,7 +506,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         brand.spacing = 9; brand.alignment = .centerY
         brand.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
 
-        let items = [("Home", "house"), ("History", "clock"), ("Dictionary", "character.book.closed"), ("Usage", "chart.bar"), ("Settings", "gearshape")]
+        let items = [("Home", "house"), ("Usage", "chart.bar"), ("Dictionary", "character.book.closed"), ("History", "clock"), ("Settings", "gearshape")]
         nav = items.enumerated().map { i, it in
             let b = NavButton(title: it.0, symbol: it.1)
             b.tag = i; b.target = self; b.action = #selector(navTapped(_:))
@@ -536,7 +536,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
 
     private func select(_ i: Int) {
         selectedPage = i
-        if i == 0 || i == 3 { reloadUsage() }
+        if i == 0 || i == 1 { reloadUsage() }
         for (n, b) in nav.enumerated() { b.isSelected = n == i }
         content.subviews.forEach { $0.removeFromSuperview() }
         pin(pages[i], in: content)
@@ -1032,7 +1032,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
 
     func refresh() {
         if typeStart != nil && !typeDone { updateTyping() }
-        if selectedPage == 0 || selectedPage == 3 { reloadUsage() }
+        if selectedPage == 0 || selectedPage == 1 { reloadUsage() }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let ax = AXIsProcessTrusted(), input = CGPreflightListenEventAccess()
         micRow.set(ok: mic); axRow.set(ok: ax); inputRow.set(ok: input)
@@ -1063,7 +1063,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         if let v = Double(planField.stringValue), v >= 0 { Stats.planPriceZAR = v; reloadStats() }
         app.refreshAI()
         refresh()
-        if selectedPage == 3 { reloadUsage() }
+        if selectedPage == 1 { reloadUsage() }
     }
     func textDidEndEditing(_ notification: Notification) { saveDict() }
 
