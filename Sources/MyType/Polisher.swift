@@ -105,12 +105,12 @@ final class Polisher {
     }
 
     /// Strips wrapper tags/quotes and rejects outputs whose length is implausible for a cleanup.
-    static func accept(_ raw: String, for text: String) -> String {
+    static func accept(_ raw: String, for text: String, ratio range: ClosedRange<Double> = 0.4...1.6) -> String {
         var out = raw.replacingOccurrences(of: "</t>", with: "").replacingOccurrences(of: "<t>", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if out.count >= 2, out.first == "\"", out.last == "\"" { out = String(out.dropFirst().dropLast()) }
         let ratio = Double(out.count) / Double(max(1, text.count))
-        return out.isEmpty || ratio < 0.4 || ratio > 1.6 ? text : out
+        return out.isEmpty || !range.contains(ratio) ? text : out
     }
 
     /// Returns polished text, or the input unchanged if the LLM is unavailable, slow, or misbehaves.

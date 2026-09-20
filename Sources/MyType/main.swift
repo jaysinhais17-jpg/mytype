@@ -13,7 +13,11 @@ final class App: NSObject, NSApplicationDelegate {
     private lazy var streamer = Streamer(recorder: recorder, transcriber: transcriber)
     private let hotkey = Hotkey()
     private let hud = HUD()
+    private let chip = RecallChip()
+    private var startApp: pid_t?   // app that was in front when this dictation began
+    private var startFocus = Focus.Kind.unknown   // whether a text box had the cursor when it began
     private var window: MainWindow!
+    private var onboarding: Onboarding!
     private var recording = false
     private var locked = false // hands-free mode after a quick tap
     private var pressStart = Date()
@@ -22,6 +26,8 @@ final class App: NSObject, NSApplicationDelegate {
     private let statusLine = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
     private let llmLine = NSMenuItem(title: "AI cleanup: loading…", action: nil, keyEquivalent: "")
     private let aiItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleAIMenu), keyEquivalent: "")
+    private let recentItem = NSMenuItem(title: "Recent dictations", action: nil, keyEquivalent: "")
+    private let recentMenu = NSMenu()
     private let loginItem = NSMenuItem(title: "Launch at login", action: #selector(toggleLoginMenu), keyEquivalent: "")
 
     private(set) var keySeen = false
@@ -46,6 +52,7 @@ final class App: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ n: Notification) {
         setIcon("mic.slash")
         buildMenu()
+        rebuildRecent()
         buildMainMenu()
         if AVCaptureDevice.authorizationStatus(for: .audio) == .notDetermined {
             AVCaptureDevice.requestAccess(for: .audio) { _ in }
@@ -53,8 +60,8 @@ final class App: NSObject, NSApplicationDelegate {
 
         _ = Net.online // start watching the connection
         recorder.onLevel = { [weak self] v in self?.hud.level(v) }
-        hotkey.onDown = { [weak self] in self?.keyDown() }
-        hotkey.onUp = { [weak self] in self?.keyUp() }
+        hotkey.onDown = { [weak self] code in self?.keyDown(code) }
+        hotkey.onUp = { [weak self] code, chorded in self?.keyUp(code, chorded: chorded) }
         hotkey.onEvent = { [weak self] _, _ in self?.keySeen = true }
         // Keep trying until Input Monitoring is granted — no relaunch needed.
         _ = hotkey.install()
@@ -64,7 +71,10 @@ final class App: NSObject, NSApplicationDelegate {
         }
 
         window = MainWindow(app: self)
-        window.show()
+        onboarding = Onboarding(app: self, main: window)
+        window.onSetup = { [weak self] in self?.onboarding.show() }
+        if let forced = ProcessInfo.processInfo.environment["MYTYPE_SETUP"] { onboarding.show(step: Int(forced) ?? 0) }
+        else if !UserDefaults.standard.bool(forKey: "onboarded") && !Cloud.useDeepgram { onboarding.show() } else { window.show() }
 
         transcriber.startServer { [weak self] ok in
             guard let self else { return }
@@ -128,6 +138,11 @@ final class App: NSObject, NSApplicationDelegate {
         let open = NSMenuItem(title: "Open MyType", action: #selector(openWindow), keyEquivalent: "")
         open.target = self
         m.addItem(open)
+        let copyLast = NSMenuItem(title: "Copy last dictation", action: #selector(copyLastDictation), keyEquivalent: "")
+        copyLast.target = self
+        m.addItem(copyLast)
+        recentItem.submenu = recentMenu
+        m.addItem(recentItem)
         m.addItem(.separator())
         m.addItem(statusLine)
         m.addItem(llmLine)
@@ -160,6 +175,21 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     @objc private func openWindow() { window.show() }
+    @objc private func copyLastDictation() { if let t = Recall.lastText { Recall.copy(t) } }
+    @objc private func copyRecent(_ item: NSMenuItem) { if let t = item.representedObject as? String { Recall.copy(t) } }
+
+    /// The menu-bar "Recent dictations" list: the last few, click one to copy it.
+    private func rebuildRecent() {
+        recentMenu.removeAllItems()
+        let items = History.items.prefix(8)
+        recentItem.isEnabled = !items.isEmpty
+        for e in items {
+            let one = e.text.split(whereSeparator: \.isNewline).joined(separator: " ")
+            let it = NSMenuItem(title: one.count > 60 ? String(one.prefix(60)) + "…" : one, action: #selector(copyRecent(_:)), keyEquivalent: "")
+            it.target = self; it.representedObject = e.text
+            recentMenu.addItem(it)
+        }
+    }
     @objc private func toggleAIMenu() { aiEnabled.toggle() }
     @objc private func toggleLoginMenu() {
         _ = setLogin(!loginEnabled)
@@ -176,22 +206,35 @@ final class App: NSObject, NSApplicationDelegate {
 
     // MARK: recording
 
-    /// Hold Fn = push-to-talk. Double-tap Fn = hands-free (tap once more to stop).
-    private func keyDown() {
+    private static let rightOption: Int64 = 61
+
+    /// Hold Fn or Right Option = push-to-talk. Double-tap Fn = hands-free (tap once more to stop).
+    /// Right Option never needs a double-tap (macOS grabs it): a single tap opens the mic hands-free, another tap stops.
+    private func keyDown(_ code: Int64) {
         if recording && locked { locked = false; finish(); return }
         guard !recording else { return }
         pressStart = Date()
+        if code == Self.rightOption { begin(showAfter: Config.tapSeconds); return }
         let isDouble = Date().timeIntervalSince(lastTapUp) < Config.doubleTapSeconds
         begin(showAfter: isDouble ? 0 : Config.tapSeconds)
         if isDouble && recording { locked = true }
     }
 
-    private func keyUp() {
+    private func keyUp(_ code: Int64, chorded: Bool) {
         guard recording, !locked else { return }
+        if code == Self.rightOption && chorded { cancelRecording(); return }   // Option+key shortcut, not dictation
         if Date().timeIntervalSince(pressStart) < Config.tapSeconds {
-            cancelRecording()
-            lastTapUp = Date()
+            if code == Self.rightOption { lockHandsFree() }
+            else { cancelRecording(); lastTapUp = Date() }
         } else { finish() }
+    }
+
+    /// A quick tap of Right Option: show the mic now and keep listening until the next tap.
+    private func lockHandsFree() {
+        locked = true
+        hudWork?.cancel(); hudWork = nil
+        hud.set(.listening)
+        NSSound(named: "Tink")?.play()
     }
 
     func beginManual() { if !recording { begin(showAfter: 0) } }
@@ -202,6 +245,10 @@ final class App: NSObject, NSApplicationDelegate {
         do {
             try recorder.start()
             recording = true
+            chip.dismiss()
+            startApp = NSWorkspace.shared.frontmostApplication?.processIdentifier
+            Focus.prime(NSWorkspace.shared.frontmostApplication)
+            startFocus = Focus.current()
             CloudPolisher.appStyle = CloudPolisher.style(for: NSWorkspace.shared.frontmostApplication)
             if Cloud.aiReady { CloudPolisher.warm() }
             if Cloud.useDeepgram && Net.online {
@@ -241,6 +288,8 @@ final class App: NSObject, NSApplicationDelegate {
         setIcon("ellipsis.circle")
         hud.set(.working)
         let useAI = aiEnabled
+        let began = startApp
+        let beganFocus = startFocus
         let dg = deepgram; deepgram = nil
         let t0 = Date()
         Task {
@@ -254,7 +303,7 @@ final class App: NSObject, NSApplicationDelegate {
             let t1 = Date()
             if engine == "deepgram" { Usage.add(UsageEvent(date: Date(), audioSeconds: secs)) }
             if TextCleaner.isUndoCommand(raw) {
-                await MainActor.run { if !(NSApp.isActive && self.window.window.isKeyWindow) { Paster.undo() } }
+                await MainActor.run { if !(self.onboarding.isFrontmost || (NSApp.isActive && self.window.window.isKeyWindow)) { Paster.undo() } }
                 return
             }
             var cleaned = TextCleaner.clean(raw)
@@ -270,9 +319,20 @@ final class App: NSObject, NSApplicationDelegate {
                              t2.timeIntervalSince(t1), useAI ? (Cloud.useLLM ? (Net.online ? "cloud" : "skipped, offline") : "local") : "off",
                              t2.timeIntervalSince(t0), secs))
             await MainActor.run {
-                // Inside our own window, type straight into the "Try it" box.
-                if NSApp.isActive && self.window.window.isKeyWindow { self.window.insertTry(text) } else { Paster.paste(text) }
-                History.add(text)
+                // Inside our own window, type straight into the "Try it" box. Otherwise the text goes to the cursor only
+                // if a text box had it when you started talking and it's still there. If you started with nothing
+                // focused, or wandered off to another app or box while dictating (say, to read System Settings),
+                // pasting would land in the wrong place, so the text stays on the clipboard and the chip offers it.
+                let sameApp = began == nil || NSWorkspace.shared.frontmostApplication?.processIdentifier == began
+                let movedOn = !sameApp || beganFocus == .noBox || (beganFocus == .textBox && Focus.current() == .noBox)
+                var copied = false
+                if self.onboarding.isFrontmost { self.onboarding.insertTry(text) }
+                else if movedOn { Recall.copy(text); copied = true }
+                else if NSApp.isActive && self.window.window.isKeyWindow { self.window.insertTry(text) }
+                else { Paster.paste(text) }
+                History.add(text, raw: raw, secs: secs)
+                if copied { self.chip.show(text) }
+                self.rebuildRecent()
                 self.window.reloadHistory()
                 if engine == "deepgram" { DeepgramBalance.refresh { self.window.reloadUsage() } }
             }

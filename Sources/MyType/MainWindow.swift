@@ -2,7 +2,12 @@ import AppKit
 import AVFoundation
 import ApplicationServices
 
-struct HistoryEntry: Codable { let date: Date; let text: String }
+struct HistoryEntry: Codable {
+    let date: Date
+    let text: String
+    var raw: String? = nil   // transcript before cleanup, for diagnosing mishearings
+    var secs: Double? = nil  // audio length, for words-per-minute
+}
 
 enum History {
     static var items: [HistoryEntry] {
@@ -10,9 +15,18 @@ enum History {
               let a = try? JSONDecoder().decode([HistoryEntry].self, from: d) else { return [] }
         return a
     }
-    static func add(_ text: String) {
+    static func words(_ s: String) -> Int { s.split(whereSeparator: \.isWhitespace).count }
+
+    /// Lifetime word count; the 50-entry history is only a window, so this keeps its own tally.
+    static var totalWords: Int {
+        if let n = UserDefaults.standard.object(forKey: "statWords") as? Int { return n }
+        return items.reduce(0) { $0 + words($1.text) }
+    }
+    static func add(_ text: String, raw: String? = nil, secs: Double? = nil) {
+        Stats.record(words: words(text), secs: secs)
+        UserDefaults.standard.set(totalWords + words(text), forKey: "statWords")
         var a = items
-        a.insert(HistoryEntry(date: Date(), text: text), at: 0)
+        a.insert(HistoryEntry(date: Date(), text: text, raw: raw, secs: secs), at: 0)
         if let d = try? JSONEncoder().encode(Array(a.prefix(50))) { UserDefaults.standard.set(d, forKey: "history") }
     }
 }
@@ -27,9 +41,10 @@ enum Theme {
     static func dynamic(light: NSColor, dark: NSColor) -> NSColor {
         NSColor(name: nil) { $0.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? dark : light }
     }
-    static let bg = dynamic(light: NSColor(white: 0.975, alpha: 1), dark: NSColor(white: 0.115, alpha: 1))
-    static let sidebar = dynamic(light: NSColor(srgbRed: 0.955, green: 0.945, blue: 0.98, alpha: 1),
-                                 dark: NSColor(srgbRed: 0.09, green: 0.085, blue: 0.12, alpha: 1))
+    static let bg = dynamic(light: NSColor(white: 0.985, alpha: 1), dark: NSColor(white: 0.115, alpha: 1))
+    static let sidebar = dynamic(light: NSColor(white: 0.955, alpha: 1), dark: NSColor(white: 0.085, alpha: 1))
+    /// Soft grey behind the selected sidebar item and filter pills.
+    static let pill = dynamic(light: NSColor(white: 0, alpha: 0.07), dark: NSColor(white: 1, alpha: 0.10))
     static let card = dynamic(light: .white, dark: NSColor(white: 0.16, alpha: 1))
     static let field = dynamic(light: NSColor(white: 0.96, alpha: 1), dark: NSColor(white: 0.12, alpha: 1))
     static let line = dynamic(light: NSColor(white: 0, alpha: 0.08), dark: NSColor(white: 1, alpha: 0.09))
@@ -40,6 +55,11 @@ func makeLabel(_ s: String, size: CGFloat, weight: NSFont.Weight = .regular, col
     t.font = .systemFont(ofSize: size, weight: weight)
     t.textColor = color
     return t
+}
+
+/// Headlines and big numbers: medium-weight system display face, like Typeless's geometric headlines.
+func serifFont(_ size: CGFloat, weight: NSFont.Weight = .medium) -> NSFont {
+    NSFont.systemFont(ofSize: size, weight: weight)
 }
 
 /// Rounded, dynamically coloured panel.
@@ -91,7 +111,7 @@ class PillButton: NSButton {
         super.init(frame: .zero)
         isBordered = false
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 16
         setButtonType(.momentaryChange)
         translatesAutoresizingMaskIntoConstraints = false
         restyle()
@@ -145,24 +165,86 @@ final class NavButton: NSButton {
         caption = title
         super.init(frame: .zero)
         image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .medium))
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
         imagePosition = .imageLeading
         alignment = .left
         isBordered = false
         wantsLayer = true
-        layer?.cornerRadius = 8
+        layer?.cornerRadius = 10
         setButtonType(.momentaryChange)
         translatesAutoresizingMaskIntoConstraints = false
         heightAnchor.constraint(equalToConstant: 36).isActive = true
         restyle()
     }
     required init?(coder: NSCoder) { fatalError() }
+    override func viewDidChangeEffectiveAppearance() { restyle() }
     private func restyle() {
-        let c: NSColor = isSelected ? Theme.purple : .labelColor
-        contentTintColor = c
+        contentTintColor = isSelected ? Theme.purple : .secondaryLabelColor
         attributedTitle = NSAttributedString(string: "  " + caption, attributes: [
-            .foregroundColor: c, .font: NSFont.systemFont(ofSize: 13, weight: isSelected ? .semibold : .regular)])
-        layer?.backgroundColor = (isSelected ? Theme.tint : .clear).cgColor
+            .foregroundColor: NSColor.labelColor, .font: NSFont.systemFont(ofSize: 13, weight: isSelected ? .semibold : .medium)])
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (isSelected ? Theme.pill : .clear).cgColor
+        }
+    }
+}
+
+/// Small rounded filter tab ("All", "Today"…).
+final class FilterPill: NSButton {
+    private let caption: String
+    var isSelected = false { didSet { restyle() } }
+    init(title: String) {
+        caption = title
+        super.init(frame: .zero)
+        isBordered = false
+        wantsLayer = true
+        layer?.cornerRadius = 15
+        setButtonType(.momentaryChange)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightAnchor.constraint(equalToConstant: 30).isActive = true
+        restyle()
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var intrinsicContentSize: NSSize { NSSize(width: super.intrinsicContentSize.width + 24, height: 30) }
+    override func viewDidChangeEffectiveAppearance() { restyle() }
+    private func restyle() {
+        let p = NSMutableParagraphStyle(); p.alignment = .center
+        attributedTitle = NSAttributedString(string: caption, attributes: [
+            .foregroundColor: isSelected ? NSColor.white : NSColor.secondaryLabelColor,
+            .font: NSFont.systemFont(ofSize: 12.5, weight: .medium), .paragraphStyle: p])
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (isSelected ? Theme.purple : Theme.pill).cgColor
+        }
+    }
+}
+
+/// Lays subviews out left to right, wrapping to new rows; height follows the width.
+final class FlowView: NSView {
+    var gap: CGFloat = 8
+    private var heightC: NSLayoutConstraint!
+    override var isFlipped: Bool { true }
+    init() {
+        super.init(frame: .zero)
+        translatesAutoresizingMaskIntoConstraints = false
+        heightC = heightAnchor.constraint(equalToConstant: 10)
+        heightC.isActive = true
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    func setItems(_ v: [NSView]) {
+        subviews.forEach { $0.removeFromSuperview() }
+        v.forEach { addSubview($0) }
+        needsLayout = true
+    }
+    override func layout() {
+        super.layout()
+        var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0
+        for v in subviews {
+            let sz = v.fittingSize
+            if x > 0 && x + sz.width > bounds.width { x = 0; y += rowH + gap; rowH = 0 }
+            v.frame = NSRect(x: x, y: y, width: sz.width, height: sz.height)
+            x += sz.width + gap; rowH = max(rowH, sz.height)
+        }
+        let h = max(y + rowH, 10)
+        if abs(heightC.constant - h) > 0.5 { heightC.constant = h }
     }
 }
 
@@ -204,12 +286,32 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let micRow: CheckRow, axRow: CheckRow, inputRow: CheckRow, keyRow: CheckRow
     private let tryView = NSTextView()
     private let historyStack = NSStackView()
-    private let dictView = NSTextView()
+    private let statWords = makeLabel("0", size: 28), statSpeak = makeLabel("–", size: 28), statType = makeLabel("–", size: 28), statSaved = makeLabel("0 min", size: 28)
+    private let statTypeCap = makeLabel("Typing WPM", size: 12, color: .secondaryLabelColor)
+    private let chart = BarChart()
+    private let chartTotal = makeLabel("", size: 12, color: .secondaryLabelColor)
+    private let moneyValue = makeLabel("$0", size: 34), moneyNote = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
+    private let planField = NSTextField()
+    private let typeView = NSTextView(), typePassage = NSTextField(wrappingLabelWithString: "")
+    private let typeLive = makeLabel("", size: 12, color: .secondaryLabelColor), typeBest = makeLabel("", size: 12, color: .secondaryLabelColor)
+    private var typeStart: Date?, typeDone = false, passageIndex = Int.random(in: 0..<3)
+    private static let passages = [
+        "The patient presented with acute pain in the right lower quadrant, a mild fever and a raised white cell count. After examination, the surgeon decided to proceed with an appendicectomy that same evening.",
+        "Good notes are short, specific and easy to scan. Write the finding, the reason and the next step, then move on. Clear writing saves time for everyone who has to read it after you.",
+        "Please review the attached report before Friday and let me know if anything looks wrong. I would like to send the final version to the whole team by the end of the day.",
+    ]
+    private var shown: [HistoryEntry] = []
+    private var historyFilter = 0
+    private var filterPills: [FilterPill] = []
+    private let wordFlow = FlowView()
+    private var newWordField: NSTextField?
+    private var words: [String] = []
     private let snipView = NSTextView()
-    private let aiSwitch = PurpleSwitch(), langSwitch = PurpleSwitch(), loginSwitch = PurpleSwitch()
+    private let aiSwitch = PurpleSwitch(), langSwitch = PurpleSwitch(), loginSwitch = PurpleSwitch(), chipSwitch = PurpleSwitch()
     private let dgField = NSSecureTextField(), llmKeyField = NSSecureTextField()
     private let llmURLField = NSTextField(), llmModelField = NSTextField()
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let stylePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let statusLabel = makeLabel("", size: 11, weight: .medium)
     private let engineLabel = makeLabel("", size: 11, color: .secondaryLabelColor)
     private let statusDot = makeLabel("●", size: 10, color: .systemOrange)
@@ -219,11 +321,17 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let content = NSView()
     private var timer: Timer?
     private var selectedPage = 0
+    var onSetup: (() -> Void)?
     private var usageCells: [[NSTextField]] = []
     private let dgRateField = NSTextField(), inRateField = NSTextField(), outRateField = NSTextField(), creditField = NSTextField()
     private let cleanupFreeSwitch = PurpleSwitch()
-    private let sumWould = makeLabel("–", size: 26, weight: .bold), sumPay = makeLabel("–", size: 26, weight: .bold), sumCredit = makeLabel("–", size: 26, weight: .bold)
-    private let sumWouldNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true), sumPayNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true), sumCreditNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true)
+    private let rateField = NSTextField()
+    /// The three cost tiles shown on both Home and Usage. Each page needs its own labels.
+    private struct CostTiles {
+        let would = makeLabel("–", size: 26, weight: .bold), pay = makeLabel("–", size: 26, weight: .bold), credit = makeLabel("–", size: 26, weight: .bold)
+        let wouldNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true), payNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true), creditNote = makeLabel("", size: 11, color: .secondaryLabelColor, wrap: true)
+    }
+    private let usageTiles = CostTiles(), homeTiles = CostTiles()
     private let creditLabel = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
 
     private static let presets: [(String, String, String)] = [
@@ -260,7 +368,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         window.isReleasedWhenClosed = false
         super.init()
 
-        pages = [buildHome(), buildDictionary(), buildUsage(), buildSettings()]
+        pages = [buildHome(), buildHistory(), buildDictionary(), buildUsage(), buildSettings()]
         let root = Surface(fill: Theme.bg, radius: 0)
         window.contentView = root
         let side = buildSidebar()
@@ -272,6 +380,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             content.leadingAnchor.constraint(equalTo: side.trailingAnchor), content.topAnchor.constraint(equalTo: root.topAnchor),
             content.trailingAnchor.constraint(equalTo: root.trailingAnchor), content.bottomAnchor.constraint(equalTo: root.bottomAnchor),
         ])
+        Currency.refresh { [weak self] in self?.rateField.stringValue = String(format: "%.2f", Currency.rate); self?.reloadStats(); self?.reloadUsage() }
         select(0)
         window.center()
         refresh()
@@ -299,8 +408,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     private func card(_ views: [NSView], spacing: CGFloat = 14) -> Surface {
-        let s = Surface(fill: Theme.card, stroke: Theme.line, radius: 14)
-        pin(vstack(views, spacing: spacing), in: s, top: 16, leading: 18, trailing: 18, bottom: 16)
+        let s = Surface(fill: Theme.card, stroke: Theme.line, radius: 16)
+        pin(vstack(views, spacing: spacing), in: s, top: 18, leading: 20, trailing: 20, bottom: 18)
         return s
     }
 
@@ -310,7 +419,13 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         return s
     }
 
-    private func sectionTitle(_ s: String) -> NSTextField { makeLabel(s.uppercased(), size: 11, weight: .semibold, color: Theme.purple) }
+    private func sectionTitle(_ s: String, symbol: String? = nil) -> NSView {
+        let t = makeLabel(s, size: 14, weight: .semibold)
+        guard let symbol, let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium)) else { return t }
+        let iv = NSImageView(image: img); iv.contentTintColor = Theme.purple
+        let r = NSStackView(views: [iv, t]); r.spacing = 7; r.alignment = .centerY
+        return r
+    }
 
     private func settingRow(_ title: String, _ sub: String?, _ control: NSView) -> NSStackView {
         var lv: [NSView] = [makeLabel(title, size: 13, weight: .medium)]
@@ -332,10 +447,10 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     private func page(_ views: [NSView]) -> NSScrollView {
-        let st = vstack(views, spacing: 18)
+        let st = vstack(views, spacing: 16)
         let doc = NSView()
         doc.translatesAutoresizingMaskIntoConstraints = false
-        pin(st, in: doc, top: 46, leading: 34, trailing: 34, bottom: 34)
+        pin(st, in: doc, top: 50, leading: 40, trailing: 40, bottom: 40)
         let sv = NSScrollView()
         sv.contentView = FlippedClip()
         sv.documentView = doc
@@ -351,10 +466,24 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         return sv
     }
 
-    private func pageHeader(_ title: String, _ sub: String) -> NSStackView {
-        let h = NSStackView(views: [makeLabel(title, size: 26, weight: .bold), makeLabel(sub, size: 13, color: .secondaryLabelColor, wrap: true)])
-        h.orientation = .vertical; h.alignment = .leading; h.spacing = 4
+    /// Big two-tone headline (dark, then grey), as on typeless.com.
+    private func pageHeader(_ title: String, _ sub: String, grey: String = "") -> NSStackView {
+        let t = NSTextField(labelWithAttributedString: {
+            let a = NSMutableAttributedString(string: title, attributes: [.font: serifFont(32), .foregroundColor: NSColor.labelColor, .kern: -0.6])
+            if !grey.isEmpty { a.append(NSAttributedString(string: grey, attributes: [.font: serifFont(32), .foregroundColor: NSColor.tertiaryLabelColor, .kern: -0.6])) }
+            return a
+        }())
+        let h = NSStackView(views: [t, makeLabel(sub, size: 13, color: .secondaryLabelColor, wrap: true)])
+        h.orientation = .vertical; h.alignment = .leading; h.spacing = 6
+        h.setCustomSpacing(8, after: t)
         return h
+    }
+
+    /// Setting rows separated by hairlines.
+    private func spaced(_ views: [NSView]) -> [NSView] {
+        var out: [NSView] = []
+        for (i, v) in views.enumerated() { if i > 0 { out.append(divider()) }; out.append(v) }
+        return out
     }
 
     // MARK: sidebar
@@ -366,36 +495,39 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         NSLayoutConstraint.activate([edge.trailingAnchor.constraint(equalTo: side.trailingAnchor), edge.topAnchor.constraint(equalTo: side.topAnchor),
                                      edge.bottomAnchor.constraint(equalTo: side.bottomAnchor), edge.widthAnchor.constraint(equalToConstant: 1)])
 
-        let logo = Surface(fill: Theme.purple, radius: 8)
+        let logo = Surface(fill: Theme.purple, radius: 9)
         let glyph = NSImageView(image: NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)!
             .withSymbolConfiguration(.init(pointSize: 14, weight: .bold))!)
         glyph.contentTintColor = .white
         logo.addSubview(glyph); glyph.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([logo.widthAnchor.constraint(equalToConstant: 30), logo.heightAnchor.constraint(equalToConstant: 30),
                                      glyph.centerXAnchor.constraint(equalTo: logo.centerXAnchor), glyph.centerYAnchor.constraint(equalTo: logo.centerYAnchor)])
-        let brand = NSStackView(views: [logo, makeLabel("MyType", size: 17, weight: .bold)])
+        let brand = NSStackView(views: [logo, makeLabel("MyType", size: 16, weight: .semibold)])
         brand.spacing = 9; brand.alignment = .centerY
+        brand.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
 
-        let items = [("Home", "house"), ("Dictionary", "character.book.closed"), ("Usage", "dollarsign.circle"), ("Settings", "gearshape")]
+        let items = [("Home", "house"), ("History", "clock"), ("Dictionary", "character.book.closed"), ("Usage", "chart.bar"), ("Settings", "gearshape")]
         nav = items.enumerated().map { i, it in
             let b = NavButton(title: it.0, symbol: it.1)
             b.tag = i; b.target = self; b.action = #selector(navTapped(_:))
             return b
         }
-        let menu = vstack(nav, spacing: 4)
+        let menu = vstack(Array(nav.prefix(4)), spacing: 2)
 
         let statusRow = NSStackView(views: [statusDot, statusLabel]); statusRow.spacing = 6
-        let footer = NSStackView(views: [statusRow, engineLabel])
-        footer.orientation = .vertical; footer.alignment = .leading; footer.spacing = 3
+        let status = NSStackView(views: [statusRow, engineLabel])
+        status.orientation = .vertical; status.alignment = .leading; status.spacing = 3
+        status.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 0)
+        let footer = vstack([nav[4], divider(), status], spacing: 10)
 
-        let top = vstack([brand, menu], spacing: 26)
+        let top = vstack([brand, menu], spacing: 24)
         top.translatesAutoresizingMaskIntoConstraints = false; footer.translatesAutoresizingMaskIntoConstraints = false
         side.addSubview(top); side.addSubview(footer)
         NSLayoutConstraint.activate([
             top.topAnchor.constraint(equalTo: side.topAnchor, constant: 52),
-            top.leadingAnchor.constraint(equalTo: side.leadingAnchor, constant: 16), top.trailingAnchor.constraint(equalTo: side.trailingAnchor, constant: -16),
-            footer.leadingAnchor.constraint(equalTo: side.leadingAnchor, constant: 18), footer.trailingAnchor.constraint(equalTo: side.trailingAnchor, constant: -14),
-            footer.bottomAnchor.constraint(equalTo: side.bottomAnchor, constant: -20),
+            top.leadingAnchor.constraint(equalTo: side.leadingAnchor, constant: 14), top.trailingAnchor.constraint(equalTo: side.trailingAnchor, constant: -14),
+            footer.leadingAnchor.constraint(equalTo: side.leadingAnchor, constant: 14), footer.trailingAnchor.constraint(equalTo: side.trailingAnchor, constant: -14),
+            footer.bottomAnchor.constraint(equalTo: side.bottomAnchor, constant: -18),
         ])
         return side
     }
@@ -404,7 +536,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
 
     private func select(_ i: Int) {
         selectedPage = i
-        if i == 2 { reloadUsage() }
+        if i == 0 || i == 3 { reloadUsage() }
         for (n, b) in nav.enumerated() { b.isSelected = n == i }
         content.subviews.forEach { $0.removeFromSuperview() }
         pin(pages[i], in: content)
@@ -413,17 +545,83 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     // MARK: pages
 
     private func buildHome() -> NSView {
-        let hero = GradientCard()
-        let big = makeLabel("Hold Fn to talk", size: 24, weight: .bold, color: .white)
-        let small = makeLabel("Double-tap Fn to go hands-free, then tap once more to stop. Right Option works too.", size: 13,
-                              color: NSColor.white.withAlphaComponent(0.85), wrap: true)
-        let text = NSStackView(views: [big, small]); text.orientation = .vertical; text.alignment = .leading; text.spacing = 6
-        let mic = NSImageView(image: NSImage(systemSymbolName: "mic.fill", accessibilityDescription: nil)!
-            .withSymbolConfiguration(.init(pointSize: 34, weight: .semibold))!)
-        mic.contentTintColor = NSColor.white.withAlphaComponent(0.92)
-        mic.setContentHuggingPriority(.required, for: .horizontal)
-        let heroRow = NSStackView(views: [text, mic]); heroRow.spacing = 20; heroRow.alignment = .centerY
-        pin(heroRow, in: hero, top: 22, leading: 26, trailing: 26, bottom: 22)
+        // ---- typing speed test
+        typePassage.maximumNumberOfLines = 0
+        typeView.isEditable = true
+        typeView.font = .systemFont(ofSize: 14)
+        typeView.drawsBackground = false
+        typeView.insertionPointColor = Theme.purple
+        typeView.textContainerInset = NSSize(width: 6, height: 8)
+        typeView.isVerticallyResizable = true
+        typeView.autoresizingMask = [.width]
+        typeView.textContainer?.widthTracksTextView = true
+        typeView.isAutomaticSpellingCorrectionEnabled = false
+        typeView.isAutomaticQuoteSubstitutionEnabled = false
+        typeView.isAutomaticTextReplacementEnabled = false
+        typeView.isContinuousSpellCheckingEnabled = false
+        typeView.delegate = self
+        let typeScroll = NSScrollView()
+        typeScroll.documentView = typeView
+        typeScroll.drawsBackground = false
+        typeScroll.hasVerticalScroller = false
+        typeScroll.translatesAutoresizingMaskIntoConstraints = false
+        typeScroll.heightAnchor.constraint(equalToConstant: 64).isActive = true
+        let typeBox = Surface(fill: Theme.field, stroke: Theme.line, radius: 10)
+        pin(typeScroll, in: typeBox, top: 2, leading: 2, trailing: 2, bottom: 2)
+        let again = PillButton(title: "New passage", primary: false)
+        again.target = self; again.action = #selector(newPassage)
+        let typeTitle = makeLabel("Typing speed", size: 15, weight: .semibold)
+        typeBest.setContentHuggingPriority(.init(200), for: .horizontal)
+        let typeHead = NSStackView(views: [typeTitle, typeBest, again]); typeHead.spacing = 12; typeHead.alignment = .centerY
+        typeHead.setCustomSpacing(12, after: typeBest)
+        let typeCard = card([typeHead, typePassage, typeBox, typeLive], spacing: 12)
+        loadPassage()
+
+        // ---- stats
+        func stat(_ value: NSTextField, _ caption: NSTextField) -> Surface {
+            value.font = serifFont(28)
+            let c = Surface(fill: Theme.card, stroke: Theme.line, radius: 16)
+            pin(vstack([value, caption], spacing: 2), in: c, top: 16, leading: 20, trailing: 20, bottom: 16)
+            return c
+        }
+        func cap(_ s: String) -> NSTextField { makeLabel(s, size: 12, color: .secondaryLabelColor) }
+        let stats = NSStackView(views: [stat(statWords, cap("Words spoken")), stat(statSpeak, cap("Speaking WPM")),
+                                        stat(statType, statTypeCap), stat(statSaved, cap("Time saved"))])
+        stats.distribution = .fillEqually; stats.spacing = 12
+
+        // ---- time saved chart + money saved
+        let chartHead = NSStackView(views: [makeLabel("Time saved", size: 15, weight: .semibold), chartTotal])
+        chartHead.distribution = .fill; chartHead.alignment = .firstBaseline
+        chartTotal.alignment = .right
+        chartTotal.setContentHuggingPriority(.init(200), for: .horizontal)
+        let chartCard = card([chartHead, chart], spacing: 12)
+
+        planField.font = .systemFont(ofSize: 12)
+        planField.stringValue = String(format: "%g", Stats.planPriceZAR)
+        planField.delegate = self
+        planField.bezelStyle = .roundedBezel; planField.focusRingType = .none
+        planField.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        moneyValue.font = serifFont(34); moneyValue.textColor = Theme.purple
+        let priceRow = NSStackView(views: [makeLabel("Compared with a subscription at R/month", size: 12, color: .secondaryLabelColor), planField])
+        priceRow.spacing = 8; priceRow.alignment = .centerY
+        let moneyCard = card([makeLabel("Money saved", size: 15, weight: .semibold), moneyValue, moneyNote, priceRow], spacing: 8)
+        let mid = NSStackView(views: [chartCard, moneyCard]); mid.spacing = 12; mid.alignment = .top
+        chartCard.widthAnchor.constraint(equalTo: moneyCard.widthAnchor, multiplier: 1.6).isActive = true
+        chartCard.heightAnchor.constraint(equalTo: moneyCard.heightAnchor).isActive = true
+
+        // ---- how to dictate + try it
+        let keycap = Surface(fill: Theme.card, stroke: Theme.line, radius: 9)
+        let fn = makeLabel("fn", size: 15, weight: .semibold, color: Theme.purple)
+        keycap.addSubview(fn); fn.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([keycap.widthAnchor.constraint(equalToConstant: 48), keycap.heightAnchor.constraint(equalToConstant: 40),
+                                     fn.centerXAnchor.constraint(equalTo: keycap.centerXAnchor), fn.centerYAnchor.constraint(equalTo: keycap.centerYAnchor)])
+        let big = makeLabel("Hold fn to talk", size: 15, weight: .semibold)
+        let small = makeLabel("Release to paste at your cursor. Double-tap fn for hands-free, then tap once more to stop. Right Option works too: hold it to talk, or tap it once to open the mic hands-free and tap again to stop.",
+                              size: 12, color: .secondaryLabelColor, wrap: true)
+        let text = NSStackView(views: [big, small]); text.orientation = .vertical; text.alignment = .leading; text.spacing = 3
+        let hero = Surface(fill: Theme.tint, radius: 16)
+        let heroRow = NSStackView(views: [keycap, text]); heroRow.spacing = 16; heroRow.alignment = .centerY
+        pin(heroRow, in: hero, top: 16, leading: 18, trailing: 18, bottom: 16)
 
         let goSettings = PillButton(title: "Open Settings", primary: false)
         goSettings.target = self; goSettings.action = #selector(openSettings)
@@ -445,7 +643,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         tryScroll.drawsBackground = false
         tryScroll.hasVerticalScroller = true
         tryScroll.translatesAutoresizingMaskIntoConstraints = false
-        tryScroll.heightAnchor.constraint(equalToConstant: 84).isActive = true
+        tryScroll.heightAnchor.constraint(equalToConstant: 52).isActive = true
         let tryBox = Surface(fill: Theme.field, stroke: Theme.line, radius: 10)
         pin(tryScroll, in: tryBox, top: 2, leading: 2, trailing: 2, bottom: 2)
 
@@ -455,39 +653,93 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let copy = PillButton(title: "Copy last", primary: false)
         copy.target = self; copy.action = #selector(copyLast)
         let buttons = NSStackView(views: [talk, copy]); buttons.spacing = 8
-        let tryRow = NSStackView(views: [makeLabel("Test it here without leaving MyType.", size: 12, color: .secondaryLabelColor), buttons])
+        let tryRow = NSStackView(views: [makeLabel("Try it here without leaving MyType.", size: 12, color: .secondaryLabelColor), buttons])
         tryRow.alignment = .centerY
-        let tryCard = card([sectionTitle("Try it"), tryBox, tryRow], spacing: 12)
+        let tryCard = card([tryBox, tryRow], spacing: 10)
 
-        historyStack.orientation = .vertical; historyStack.alignment = .leading; historyStack.spacing = 12
-        let recentCard = card([sectionTitle("Recent"), historyStack], spacing: 12)
+        let first = NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
+        return page([pageHeader(first.isEmpty ? "Welcome back" : "Welcome back, ", "Speak anywhere. Your words appear at the cursor.", grey: first), setupBanner, costSummary(homeTiles), stats, mid, typeCard, hero, tryCard])
+    }
 
-        return page([pageHeader("Welcome back", "Speak anywhere. Your words appear at the cursor."), setupBanner, hero, tryCard, recentCard])
+    private func buildHistory() -> NSView {
+        historyStack.orientation = .vertical; historyStack.alignment = .leading; historyStack.spacing = 8
+        filterPills = ["All", "Today", "This week"].enumerated().map { i, t in
+            let b = FilterPill(title: t); b.tag = i; b.isSelected = i == 0
+            b.target = self; b.action = #selector(pickFilter(_:))
+            return b
+        }
+        let tabs = NSStackView(views: filterPills); tabs.spacing = 8
+        return page([pageHeader("History", "Your recent dictations. Copy the text, or the original transcript before cleanup."), tabs, vstack([historyStack], spacing: 0)])
+    }
+
+    // MARK: typing test
+
+    private func loadPassage() {
+        typeStart = nil; typeDone = false
+        typeView.isEditable = true
+        typeView.string = ""
+        updateTyping()
+    }
+    @objc private func newPassage() {
+        passageIndex = (passageIndex + 1) % MainWindow.passages.count
+        loadPassage()
+        window.makeFirstResponder(typeView)
+    }
+    func textDidChange(_ notification: Notification) {
+        if (notification.object as? NSTextView) === typeView { updateTyping() }
+    }
+
+    private func updateTyping() {
+        let target = Array(MainWindow.passages[passageIndex]), typed = Array(typeView.string)
+        if typeStart == nil && !typed.isEmpty { typeStart = Date() }
+        let out = NSMutableAttributedString()
+        var correct = 0
+        for (i, ch) in target.enumerated() {
+            var attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 14), .foregroundColor: NSColor.tertiaryLabelColor]
+            if i < typed.count {
+                if typed[i] == ch { correct += 1; attrs[.foregroundColor] = NSColor.labelColor }
+                else { attrs[.foregroundColor] = NSColor.systemRed; attrs[.backgroundColor] = NSColor.systemRed.withAlphaComponent(0.15) }
+            } else if i == typed.count { attrs[.foregroundColor] = NSColor.secondaryLabelColor }
+            out.append(NSAttributedString(string: String(ch), attributes: attrs))
+        }
+        typePassage.attributedStringValue = out
+        guard let start = typeStart else {
+            typeLive.stringValue = "The timer starts on your first keystroke. Type the passage above."
+            return
+        }
+        let elapsed = max(0.5, Date().timeIntervalSince(start))
+        let wpm = Double(correct) / 5 / (elapsed / 60)
+        let acc = typed.isEmpty ? 100 : Int((Double(correct) / Double(typed.count) * 100).rounded())
+        if !typeDone && typed.count >= target.count {
+            typeDone = true
+            typeView.isEditable = false
+            if acc >= 80 && elapsed > 3 {
+                Stats.typingWPM = wpm
+                if wpm > (Stats.typingBest ?? 0) { Stats.typingBest = wpm }
+                reloadStats()
+                typeLive.stringValue = String(format: "Done: %.0f WPM at %d%% accuracy. Saved as your typing speed.", wpm, acc)
+            } else {
+                typeLive.stringValue = "Done, but accuracy was \(acc)%. Try again for a fair result."
+            }
+            return
+        }
+        if !typeDone { typeLive.stringValue = String(format: "%.0f WPM · %d%% accuracy · %.0fs", wpm, acc, elapsed) }
     }
 
     private func buildDictionary() -> NSView {
-        dictView.string = Config.dictionary
-        dictView.font = .systemFont(ofSize: 14)
-        dictView.drawsBackground = false
-        dictView.insertionPointColor = Theme.purple
-        dictView.textContainerInset = NSSize(width: 8, height: 10)
-        dictView.isVerticallyResizable = true
-        dictView.autoresizingMask = [.width]
-        dictView.textContainer?.widthTracksTextView = true
-        dictView.delegate = self
-        let sv = NSScrollView()
-        sv.documentView = dictView
-        sv.drawsBackground = false
-        sv.hasVerticalScroller = true
-        sv.translatesAutoresizingMaskIntoConstraints = false
-        sv.heightAnchor.constraint(equalToConstant: 190).isActive = true
-        let box = Surface(fill: Theme.field, stroke: Theme.line, radius: 10)
-        pin(sv, in: box, top: 2, leading: 2, trailing: 2, bottom: 2)
-        let save = PillButton(title: "Save")
-        save.target = self; save.action = #selector(saveDict)
-        let saveRow = NSStackView(views: [makeLabel("Separate words with commas. Saved automatically when you click away.", size: 12, color: .secondaryLabelColor), save])
-        saveRow.alignment = .centerY
-        let c = card([sectionTitle("Your words"), box, saveRow], spacing: 12)
+        let addField = NSTextField()
+        addField.placeholderString = "Add a word or name"
+        addField.bezelStyle = .roundedBezel; addField.focusRingType = .none
+        addField.target = self; addField.action = #selector(addWord(_:))
+        addField.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        newWordField = addField
+        let add = PillButton(title: "New word")
+        add.target = self; add.action = #selector(addWord(_:))
+        let addRow = NSStackView(views: [addField, add]); addRow.spacing = 8; addRow.alignment = .centerY
+        wordFlow.gap = 8
+        let c = card([sectionTitle("Your words", symbol: "textformat.abc"), addRow, wordFlow,
+                      makeLabel("Press Return to add a word. Paste several separated by commas.", size: 12, color: .secondaryLabelColor, wrap: true)], spacing: 14)
+        reloadWords()
 
         snipView.string = Config.snippets
         snipView.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
@@ -509,12 +761,32 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let sbox = Surface(fill: Theme.field, stroke: Theme.line, radius: 10)
         pin(ssv, in: sbox, top: 2, leading: 2, trailing: 2, bottom: 2)
         let snipHint = makeLabel("One per line, like:  my email = jay@example.com. Say the words on the left and the text on the right is typed instead.", size: 12, color: .secondaryLabelColor, wrap: true)
-        let sc = card([sectionTitle("Snippets"), sbox, snipHint], spacing: 12)
+        let sc = card([sectionTitle("Snippets", symbol: "text.badge.plus"), sbox, snipHint], spacing: 12)
         return page([pageHeader("Dictionary", "Names, drugs and jargon MyType should always spell right."), c, sc])
     }
 
     private static let usagePeriods = ["Today", "This month", "All time"]
     private static let usageColumns = ["", "Dictations", "Audio", "Speech", "Cleanup tokens", "Cleanup", "List price", "You pay"]
+
+    /// "This month" cost summary: list price, what you actually pay, and Deepgram credit left.
+    private func costSummary(_ t: CostTiles) -> Surface {
+        func tile(_ title: String, _ value: NSTextField, _ note: NSTextField, accent: Bool = false) -> Surface {
+            let c = Surface(fill: accent ? Theme.purple.withAlphaComponent(0.12) : Theme.field, stroke: accent ? Theme.purple.withAlphaComponent(0.5) : Theme.line, radius: 12)
+            pin(vstack([makeLabel(title, size: 12, weight: .medium, color: .secondaryLabelColor), value, note], spacing: 4), in: c, top: 14, leading: 16, trailing: 16, bottom: 14)
+            return c
+        }
+        let cells = [tile("Would cost at list price", t.would, t.wouldNote),
+                     tile("You actually pay", t.pay, t.payNote, accent: true),
+                     tile("Deepgram credit left", t.credit, t.creditNote)]
+        let tiles = NSStackView(views: cells)
+        tiles.distribution = .fillEqually; tiles.spacing = 12; tiles.alignment = .top
+        for c in cells.dropFirst() { c.heightAnchor.constraint(equalTo: cells[0].heightAnchor).isActive = true }
+        let refresh = PillButton(title: "Refresh balance", primary: false)
+        refresh.target = self; refresh.action = #selector(refreshBalance)
+        let spacer = NSView(); spacer.setContentHuggingPriority(.init(1), for: .horizontal)
+        let refreshRow = NSStackView(views: [refresh, spacer]); refreshRow.spacing = 0
+        return card([sectionTitle("This month", symbol: "calendar"), tiles, refreshRow], spacing: 14)
+    }
 
     private func buildUsage() -> NSView {
         var rows: [[NSView]] = [MainWindow.usageColumns.map { makeLabel($0, size: 11, weight: .semibold, color: .secondaryLabelColor) }]
@@ -526,32 +798,24 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         }
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 12; grid.columnSpacing = 22
-        func tile(_ title: String, _ value: NSTextField, _ note: NSTextField, accent: Bool = false) -> Surface {
-            let t = Surface(fill: accent ? Theme.purple.withAlphaComponent(0.12) : Theme.field, stroke: accent ? Theme.purple.withAlphaComponent(0.5) : Theme.line, radius: 12)
-            pin(vstack([makeLabel(title, size: 12, weight: .medium, color: .secondaryLabelColor), value, note], spacing: 4), in: t, top: 14, leading: 16, trailing: 16, bottom: 14)
-            return t
-        }
-        let tiles = NSStackView(views: [tile("Would cost at list price", sumWould, sumWouldNote),
-                                        tile("You actually pay", sumPay, sumPayNote, accent: true),
-                                        tile("Deepgram credit left", sumCredit, sumCreditNote)])
-        tiles.distribution = .fillEqually; tiles.spacing = 12
-        let refresh = PillButton(title: "Refresh balance", primary: false)
-        refresh.target = self; refresh.action = #selector(refreshBalance)
-        let summary = card([sectionTitle("This month"), tiles, refresh], spacing: 14)
-        let table = card([sectionTitle("Running cost"), grid, creditLabel,
+        let summary = costSummary(usageTiles)
+        let table = card([sectionTitle("Running cost", symbol: "chart.bar"), grid, creditLabel,
                           makeLabel("List price is what these dictations would cost at normal rates. You pay is what actually leaves your pocket: speech is covered by your Deepgram credit until it runs out, and cleanup is covered by the free tier while that switch is on. Estimates from the rates below, not an invoice.",
                                     size: 11, color: .secondaryLabelColor, wrap: true)])
         cleanupFreeSwitch.isOn = Usage.cleanupFree
         cleanupFreeSwitch.target = self; cleanupFreeSwitch.action = #selector(toggleCleanupFree)
+        rateField.delegate = self
         let rates = card([
-            sectionTitle("Rates and credits (USD)"),
-            settingRow("Deepgram credit", "Your sign-up credit. Speech costs you nothing until list-price spend passes this.",
+            sectionTitle("Rates and credits", symbol: "percent"),
+            settingRow("Exchange rate, rand per US$", "Everything is shown in rand. Provider prices below are in US dollars. Fetched daily; type a number to fix your own.",
+                       field(rateField, placeholder: "18", value: String(format: "%.2f", Currency.rate), width: 90)),
+            settingRow("Deepgram credit (US$)", "Your sign-up credit. Speech costs you nothing until list-price spend passes this.",
                        field(creditField, placeholder: "200", value: String(Usage.deepgramCredit), width: 90)),
             settingRow("Cleanup is on a free tier", "Groq has a rate-limited free tier for now. Turn this off if you move to a paid plan.", cleanupFreeSwitch),
-            settingRow("Speech, per minute", "Deepgram Nova-3 streaming was about $0.0077/min when I set this up.",
+            settingRow("Speech, US$ per minute", "Deepgram Nova-3 streaming was about US$0.0077/min when I set this up.",
                        field(dgRateField, placeholder: "0.0077", value: String(Usage.deepgramPerMinute), width: 90)),
-            settingRow("Cleanup input, per 1M tokens", nil, field(inRateField, placeholder: "0.29", value: String(Usage.llmInPerMillion), width: 90)),
-            settingRow("Cleanup output, per 1M tokens", "Defaults are a rough guess for Groq's Qwen models. Check your provider's pricing page and edit.",
+            settingRow("Cleanup input, US$ per 1M tokens", nil, field(inRateField, placeholder: "0.29", value: String(Usage.llmInPerMillion), width: 90)),
+            settingRow("Cleanup output, US$ per 1M tokens", "Defaults are a rough guess for Groq's Qwen models. Check your provider's pricing page and edit.",
                        field(outRateField, placeholder: "0.59", value: String(Usage.llmOutPerMillion), width: 90)),
         ])
         return page([pageHeader("Usage", "What your API keys are costing, tracked on this Mac."), summary, table, rates])
@@ -564,7 +828,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let evs = Usage.events()
         let cal = Calendar.current, now = Date()
         let since: [Date?] = [cal.startOfDay(for: now), cal.dateInterval(of: .month, for: now)?.start, nil]
-        func usd(_ v: Double) -> String { v < 0.1 ? String(format: "$%.4f", v) : String(format: "$%.2f", v) }
+        func usd(_ v: Double) -> String { Currency.format(usd: v) }
         func k(_ n: Int) -> String { n >= 10_000 ? String(format: "%.1fk", Double(n) / 1000) : String(n) }
         for (i, s) in since.enumerated() {
             let t = Usage.totals(evs, since: s)
@@ -574,18 +838,20 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         }
         let st = Usage.creditStatus(evs), credit = Usage.deepgramCredit
         let month = Usage.totals(evs, since: since[1])
-        sumWould.stringValue = usd(month.total)
-        sumWouldNote.stringValue = "Speech \(usd(month.speechCost)) + cleanup \(usd(month.cleanupCost)). What this would cost with no credit and no free tier."
-        sumPay.stringValue = usd(month.youPay)
-        sumPayNote.stringValue = month.youPay < 0.005 ? "Nothing. Your Deepgram credit and the free cleanup tier cover it all."
-            : "Speech beyond your credit\(Usage.cleanupFree ? "" : " plus cleanup")."
-        if let live = DeepgramBalance.amount, DeepgramBalance.note.isEmpty {
-            sumCredit.stringValue = usd(live)
-            let f = DateFormatter(); f.timeStyle = .short; f.dateStyle = .none
-            sumCreditNote.stringValue = "Live from Deepgram (\(f.string(from: DeepgramBalance.updated ?? Date()))). \(usd(max(0, credit - live))) of \(usd(credit)) used so far."
-        } else {
-            sumCredit.stringValue = usd(max(0, credit - st.used))
-            sumCreditNote.stringValue = DeepgramBalance.note.isEmpty ? "Estimated from this Mac's usage." : "Estimated from this Mac's usage. " + DeepgramBalance.note
+        for t in [usageTiles, homeTiles] {
+            t.would.stringValue = usd(month.total)
+            t.wouldNote.stringValue = "Speech \(usd(month.speechCost)) + cleanup \(usd(month.cleanupCost)). What this would cost with no credit and no free tier."
+            t.pay.stringValue = usd(month.youPay)
+            t.payNote.stringValue = month.youPay < 0.005 ? "Nothing. Your Deepgram credit and the free cleanup tier cover it all."
+                : "Speech beyond your credit\(Usage.cleanupFree ? "" : " plus cleanup")."
+            if let live = DeepgramBalance.amount, DeepgramBalance.note.isEmpty {
+                t.credit.stringValue = usd(live)
+                let f = DateFormatter(); f.timeStyle = .short; f.dateStyle = .none
+                t.creditNote.stringValue = "Live from Deepgram (\(f.string(from: DeepgramBalance.updated ?? Date()))). \(usd(max(0, credit - live))) of \(usd(credit)) used so far."
+            } else {
+                t.credit.stringValue = usd(max(0, credit - st.used))
+                t.creditNote.stringValue = DeepgramBalance.note.isEmpty ? "Estimated from this Mac's usage." : "Estimated from this Mac's usage. " + DeepgramBalance.note
+            }
         }
         var line = "Deepgram credit: \(usd(max(0, credit - st.used))) left of \(usd(credit)). At your current pace the true cost is about \(usd(st.monthly)) a month"
         if st.monthly > 0 { line += String(format: ", so the credit lasts roughly %.0f months.", max(0, credit - st.used) / max(0.0001, evs.isEmpty ? 1 : st.monthly)) } else { line += "." }
@@ -593,7 +859,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     private func buildSettings() -> NSView {
-        for (sw, sel) in [(aiSwitch, #selector(toggleAI)), (langSwitch, #selector(toggleLang)), (loginSwitch, #selector(toggleLogin))] {
+        for (sw, sel) in [(aiSwitch, #selector(toggleAI)), (langSwitch, #selector(toggleLang)), (loginSwitch, #selector(toggleLogin)), (chipSwitch, #selector(toggleChip))] {
             sw.target = self; sw.action = sel
         }
         presetPopup.addItems(withTitles: ["Custom"] + MainWindow.presets.map { $0.0 })
@@ -601,31 +867,49 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         presetPopup.widthAnchor.constraint(equalToConstant: 270).isActive = true
         if let i = MainWindow.presets.firstIndex(where: { $0.1 == Cloud.llmBaseURL }) { presetPopup.selectItem(at: i + 1) }
 
-        let speech = card([
-            sectionTitle("Cloud (optional)"),
+        let speech = card(
+            [sectionTitle("Cloud (optional)", symbol: "cloud")] + spaced([
             settingRow("Deepgram key", "Streams speech to Deepgram: faster and more accurate.",
                        field(dgField, placeholder: "Paste key", value: Cloud.deepgramKey)),
-            divider(),
             settingRow("Cleanup provider", nil, presetPopup),
             settingRow("Cleanup key", "Used to fix punctuation and edits.", field(llmKeyField, placeholder: "Paste API key", value: Cloud.llmKey)),
             settingRow("Base URL", nil, field(llmURLField, placeholder: "https://…", value: Cloud.llmBaseURL)),
             settingRow("Model", nil, field(llmModelField, placeholder: "model name", value: Cloud.llmModel)),
-            makeLabel("With keys set, audio and text leave your Mac. Leave blank to stay fully on-device. Keys are stored on this Mac only.",
-                      size: 11, color: .secondaryLabelColor, wrap: true),
-        ])
-        let general = card([
-            sectionTitle("General"),
+            ]) + [makeLabel("With keys set, audio and text leave your Mac. Leave blank to stay fully on-device. Keys are stored on this Mac only.",
+                      size: 11, color: .secondaryLabelColor, wrap: true)],
+        spacing: 16)
+        stylePopup.addItems(withTitles: WritingStyle.allCases.map(\.title))
+        stylePopup.selectItem(at: WritingStyle.allCases.firstIndex(of: WritingStyle.current) ?? 0)
+        stylePopup.target = self; stylePopup.action = #selector(pickStyle)
+        stylePopup.widthAnchor.constraint(equalToConstant: 150).isActive = true
+        let general = card([sectionTitle("General", symbol: "slider.horizontal.3")] + spaced([
+            settingRow("Writing style", WritingStyle.allCases.map { "\($0.title): \($0.detail)" }.joined(separator: "\n"), stylePopup),
             settingRow("AI cleanup", "Smarter edits. Uses your cloud key if set, otherwise a local model (~2 GB RAM).", aiSwitch),
-            divider(),
             settingRow("Auto-detect language", "Restart MyType to apply.", langSwitch),
-            divider(),
+            settingRow("Copy chip when nothing is focused", "If no text box is focused when you start talking, or you switch apps mid-dictation, the text is kept on the clipboard and a small chip lets you copy it again. Nothing appears when it types into a text box.", chipSwitch),
             settingRow("Launch at login", nil, loginSwitch),
-        ])
-        let perms = card([sectionTitle("Permissions"), micRow.view, axRow.view, inputRow.view, keyRow.view])
+        ]), spacing: 16)
+        let setupBtn = PillButton(title: "Open setup guide", primary: false)
+        setupBtn.target = self; setupBtn.action = #selector(runSetup)
+        let perms = card([sectionTitle("Permissions", symbol: "lock.shield")] + spaced([micRow.view, axRow.view, inputRow.view, keyRow.view]) + [setupBtn], spacing: 14)
         return page([pageHeader("Settings", "Speech, cleanup and permissions."), speech, general, perms])
     }
 
     // MARK: actions
+
+    /// Re-reads stored keys into the Settings fields (the setup guide changes them behind our back).
+    func reloadKeyFields() {
+        dgField.stringValue = Cloud.deepgramKey; llmKeyField.stringValue = Cloud.llmKey
+        llmURLField.stringValue = Cloud.llmBaseURL; llmModelField.stringValue = Cloud.llmModel
+        presetPopup.selectItem(at: (MainWindow.presets.firstIndex(where: { $0.1 == Cloud.llmBaseURL }) ?? -1) + 1)
+        refresh()
+    }
+
+    @objc private func pickStyle() {
+        WritingStyle.current = WritingStyle.allCases[max(0, stylePopup.indexOfSelectedItem)]
+    }
+
+    @objc private func runSetup() { onSetup?() }
 
     func show() {
         window.makeKeyAndOrderFront(nil)
@@ -638,34 +922,117 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         tryView.insertText(text + " ", replacementRange: tryView.selectedRange())
     }
 
+    @objc private func pickFilter(_ b: FilterPill) {
+        historyFilter = b.tag
+        for (i, p) in filterPills.enumerated() { p.isSelected = i == b.tag }
+        reloadHistory()
+    }
+
     func reloadHistory() {
+        reloadStats()
         historyStack.arrangedSubviews.forEach { historyStack.removeArrangedSubview($0); $0.removeFromSuperview() }
-        let items = History.items.prefix(20)
-        if items.isEmpty {
-            historyStack.addArrangedSubview(makeLabel("Your dictations will show up here.", size: 13, color: .secondaryLabelColor))
+        let cutoff: Date? = historyFilter == 1 ? Calendar.current.startOfDay(for: Date())
+            : historyFilter == 2 ? Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date())) : nil
+        shown = Array(History.items.filter { cutoff == nil || $0.date >= cutoff! }.prefix(30))
+        if shown.isEmpty {
+            historyStack.addArrangedSubview(makeLabel(historyFilter == 0 ? "Your dictations will show up here." : "Nothing in this period yet.", size: 13, color: .secondaryLabelColor))
             return
         }
-        let f = DateFormatter(); f.dateFormat = "HH:mm"
-        let g = DateFormatter(); g.dateFormat = "d MMM HH:mm"
-        for (i, e) in items.enumerated() {
-            if i > 0 {
-                let d = divider()
-                historyStack.addArrangedSubview(d)
-                d.widthAnchor.constraint(equalTo: historyStack.widthAnchor).isActive = true
+        let cal = Calendar.current
+        let clock = DateFormatter(); clock.dateFormat = "HH:mm"
+        let dayFmt = DateFormatter(); dayFmt.dateFormat = "EEEE, d MMMM"
+        var i = 0
+        while i < shown.count {
+            let day = cal.startOfDay(for: shown[i].date)
+            var j = i
+            while j < shown.count, cal.startOfDay(for: shown[j].date) == day { j += 1 }
+            let name = cal.isDateInToday(day) ? "Today" : cal.isDateInYesterday(day) ? "Yesterday" : dayFmt.string(from: day)
+            let head = makeLabel(name, size: 12, weight: .medium, color: .secondaryLabelColor)
+            var rows: [NSView] = []
+            for k in i..<j {
+                if k > i { rows.append(divider()) }
+                rows.append(historyRow(shown[k], index: k, time: clock.string(from: shown[k].date)))
             }
-            let when = makeLabel(Calendar.current.isDateInToday(e.date) ? f.string(from: e.date) : g.string(from: e.date),
-                                 size: 11, weight: .medium, color: Theme.purple)
-            let body = makeLabel(e.text, size: 13, wrap: true)
-            body.isSelectable = true
-            let row = NSStackView(views: [when, body])
-            row.orientation = .vertical; row.alignment = .leading; row.spacing = 3
-            historyStack.addArrangedSubview(row)
-            row.widthAnchor.constraint(equalTo: historyStack.widthAnchor).isActive = true
+            let group = Surface(fill: Theme.card, stroke: Theme.line, radius: 16)
+            pin(vstack(rows, spacing: 0), in: group, top: 2, leading: 0, trailing: 0, bottom: 2)
+            historyStack.addArrangedSubview(head)
+            historyStack.setCustomSpacing(6, after: head)
+            historyStack.addArrangedSubview(group)
+            historyStack.setCustomSpacing(20, after: group)
+            group.widthAnchor.constraint(equalTo: historyStack.widthAnchor).isActive = true
+            i = j
         }
     }
 
+    private func historyRow(_ e: HistoryEntry, index: Int, time: String) -> NSView {
+        let row = NSView(); row.translatesAutoresizingMaskIntoConstraints = false
+        let when = makeLabel(time, size: 12, color: .tertiaryLabelColor)
+        when.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        let body = makeLabel(e.text, size: 13, wrap: true)
+        body.isSelectable = true
+        body.setContentCompressionResistancePriority(.init(250), for: .horizontal)
+
+        func icon(_ symbol: String, _ tip: String, _ action: Selector) -> NSButton {
+            let b = NSButton()
+            b.image = NSImage(systemSymbolName: symbol, accessibilityDescription: tip)?.withSymbolConfiguration(.init(pointSize: 12, weight: .medium))
+            b.isBordered = false; b.contentTintColor = .secondaryLabelColor; b.toolTip = tip
+            b.tag = index; b.target = self; b.action = action
+            b.translatesAutoresizingMaskIntoConstraints = false
+            b.widthAnchor.constraint(equalToConstant: 24).isActive = true; b.heightAnchor.constraint(equalToConstant: 24).isActive = true
+            return b
+        }
+        var actions = [icon("doc.on.doc", "Copy", #selector(copyEntry(_:)))]
+        if let r = e.raw, !r.isEmpty, r != e.text { actions.insert(icon("arrow.uturn.backward", "Copy original transcript", #selector(copyRaw(_:))), at: 0) }
+        let tools = NSStackView(views: actions); tools.spacing = 0
+        tools.translatesAutoresizingMaskIntoConstraints = false
+        for v in [when, body, tools] as [NSView] { v.translatesAutoresizingMaskIntoConstraints = false; row.addSubview(v) }
+        NSLayoutConstraint.activate([
+            when.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 18), when.topAnchor.constraint(equalTo: row.topAnchor, constant: 13),
+            when.widthAnchor.constraint(equalToConstant: 40),
+            body.leadingAnchor.constraint(equalTo: when.trailingAnchor, constant: 12),
+            body.topAnchor.constraint(equalTo: row.topAnchor, constant: 12), body.bottomAnchor.constraint(equalTo: row.bottomAnchor, constant: -12),
+            body.trailingAnchor.constraint(equalTo: tools.leadingAnchor, constant: -12),
+            tools.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -12), tools.topAnchor.constraint(equalTo: row.topAnchor, constant: 9),
+        ])
+        return row
+    }
+
+    private func copyToPasteboard(_ s: String, from sender: NSButton) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(s, forType: .string)
+        let old = sender.image, tint = sender.contentTintColor
+        sender.image = NSImage(systemSymbolName: "checkmark", accessibilityDescription: "Copied")?.withSymbolConfiguration(.init(pointSize: 12, weight: .semibold))
+        sender.contentTintColor = Theme.purple
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { sender.image = old; sender.contentTintColor = tint }
+    }
+    @objc private func copyEntry(_ b: NSButton) { if shown.indices.contains(b.tag) { copyToPasteboard(shown[b.tag].text, from: b) } }
+    @objc private func copyRaw(_ b: NSButton) { if shown.indices.contains(b.tag), let r = shown[b.tag].raw { copyToPasteboard(r, from: b) } }
+
+    private func reloadStats() {
+        let nf = NumberFormatter(); nf.numberStyle = .decimal
+        statWords.stringValue = nf.string(from: NSNumber(value: Stats.totalWords)) ?? "0"
+        statSpeak.stringValue = Stats.speakingWPM.map { String(Int($0.rounded())) } ?? "–"
+        statType.stringValue = Stats.typingWPM.map { String(Int($0.rounded())) } ?? "–"
+        statTypeCap.stringValue = Stats.typingWPM == nil ? "Typing WPM (take the test)" : "Typing WPM"
+        statSaved.stringValue = Stats.duration(Stats.totalSavedSeconds)
+        typeBest.stringValue = Stats.typingBest.map { "Best: \(Int($0.rounded())) WPM" } ?? ""
+
+        let daily = Stats.dailySaved(14)
+        let f = DateFormatter(); f.dateFormat = "d MMM"
+        chart.values = daily.map { (f.string(from: $0.date), $0.minutes) }
+        let week = daily.suffix(7).reduce(0) { $0 + $1.minutes }
+        chartTotal.stringValue = "\(Stats.duration(week * 60)) this week · streak \(Stats.streak()) day\(Stats.streak() == 1 ? "" : "s")"
+
+        func rand(_ v: Double) -> String { Currency.format(rand: v) }
+        moneyValue.stringValue = rand(Stats.moneySaved)
+        let m = Stats.monthsUsed
+        let listPrice = Currency.zar(Usage.totals(Usage.events(), since: nil).total)
+        moneyNote.stringValue = "A subscription would have cost \(rand(Stats.subscriptionCost)) over \(m) month\(m == 1 ? "" : "s"). MyType has cost you \(rand(Stats.myTypeCost)) (\(rand(listPrice)) at list price)."
+    }
+
     func refresh() {
-        if selectedPage == 2 { reloadUsage() }
+        if typeStart != nil && !typeDone { updateTyping() }
+        if selectedPage == 0 || selectedPage == 3 { reloadUsage() }
         let mic = AVCaptureDevice.authorizationStatus(for: .audio) == .authorized
         let ax = AXIsProcessTrusted(), input = CGPreflightListenEventAccess()
         micRow.set(ok: mic); axRow.set(ok: ax); inputRow.set(ok: input)
@@ -678,6 +1045,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         if aiSwitch.isOn != app.aiEnabled { aiSwitch.isOn = app.aiEnabled }
         if langSwitch.isOn != app.autoLanguage { langSwitch.isOn = app.autoLanguage }
         if loginSwitch.isOn != app.loginEnabled { loginSwitch.isOn = app.loginEnabled }
+        if chipSwitch.isOn != Recall.enabled { chipSwitch.isOn = Recall.enabled }
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
@@ -689,13 +1057,17 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         if let v = Double(inRateField.stringValue) { Usage.llmInPerMillion = v }
         if let v = Double(outRateField.stringValue) { Usage.llmOutPerMillion = v }
         if let v = Double(creditField.stringValue) { Usage.deepgramCredit = v }
+        if let v = Double(rateField.stringValue.replacingOccurrences(of: ",", with: ".")), v > 1, abs(v - Currency.rate) > 0.0001 {
+            Currency.rate = v; Currency.manual = true; reloadStats()
+        }
+        if let v = Double(planField.stringValue), v >= 0 { Stats.planPriceZAR = v; reloadStats() }
         app.refreshAI()
         refresh()
-        if selectedPage == 2 { reloadUsage() }
+        if selectedPage == 3 { reloadUsage() }
     }
     func textDidEndEditing(_ notification: Notification) { saveDict() }
 
-    @objc private func openSettings() { select(3) }
+    @objc private func openSettings() { select(4) }
     @objc private func pickPreset() {
         let i = presetPopup.indexOfSelectedItem - 1
         guard i >= 0 else { return }
@@ -703,9 +1075,46 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         llmModelField.stringValue = MainWindow.presets[i].2
         controlTextDidEndEditing(Notification(name: NSControl.textDidEndEditingNotification))
     }
-    @objc private func saveDict() { Config.dictionary = dictView.string; Config.snippets = snipView.string }
+    @objc private func saveDict() { Config.snippets = snipView.string }
+
+    private func reloadWords() {
+        words = Config.dictionary.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        wordFlow.setItems(words.isEmpty ? [makeLabel("No words yet. Add names or terms MyType keeps mishearing.", size: 12, color: .tertiaryLabelColor)]
+                                        : words.enumerated().map { chip($0.element, index: $0.offset) })
+    }
+
+    private func chip(_ word: String, index: Int) -> NSView {
+        let c = Surface(fill: Theme.field, stroke: Theme.line, radius: 15)
+        let x = NSButton()
+        x.image = NSImage(systemSymbolName: "xmark", accessibilityDescription: "Remove")?.withSymbolConfiguration(.init(pointSize: 9, weight: .bold))
+        x.isBordered = false; x.contentTintColor = .tertiaryLabelColor; x.tag = index
+        x.target = self; x.action = #selector(removeWord(_:))
+        x.translatesAutoresizingMaskIntoConstraints = false
+        x.widthAnchor.constraint(equalToConstant: 16).isActive = true
+        let row = NSStackView(views: [makeLabel(word, size: 13), x]); row.spacing = 4; row.alignment = .centerY
+        pin(row, in: c, top: 6, leading: 13, trailing: 8, bottom: 6)
+        return c
+    }
+
+    @objc private func addWord(_ sender: Any?) {
+        guard let f = newWordField else { return }
+        let new = f.stringValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        guard !new.isEmpty else { return }
+        for w in new where !words.contains(where: { $0.caseInsensitiveCompare(w) == .orderedSame }) { words.append(w) }
+        Config.dictionary = words.joined(separator: ", ")
+        f.stringValue = ""
+        reloadWords()
+    }
+
+    @objc private func removeWord(_ b: NSButton) {
+        guard words.indices.contains(b.tag) else { return }
+        words.remove(at: b.tag)
+        Config.dictionary = words.joined(separator: ", ")
+        reloadWords()
+    }
     @objc private func toggleCleanupFree() { Usage.cleanupFree = cleanupFreeSwitch.isOn; reloadUsage() }
     @objc private func toggleAI() { app.aiEnabled = aiSwitch.isOn }
+    @objc private func toggleChip() { Recall.enabled = chipSwitch.isOn }
     @objc private func toggleLang() { app.autoLanguage = langSwitch.isOn }
     @objc private func toggleLogin() {
         if let err = app.setLogin(loginSwitch.isOn) {
