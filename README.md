@@ -13,7 +13,11 @@ Requires a Mac with **Apple Silicon** (M1 or newer) and **macOS 13 or later**.
 ## Install
 
 1. Open `MyType.dmg` and drag **MyType** into **Applications**.
-2. **First launch only:** right-click MyType, choose **Open**, then click **Open** again. macOS shows a warning because the app is not notarized (that needs a paid Apple developer account). If Open is not offered, go to System Settings > Privacy & Security and click **Open Anyway**.
+2. **First launch only:** macOS will say it can't verify MyType, because the app is not notarized (that needs a paid Apple developer account). It is safe to open:
+   - Try to open MyType once and dismiss the warning.
+   - Go to **System Settings > Privacy & Security**, scroll down, and click **Open Anyway** next to MyType, then confirm.
+   - On macOS 14 or earlier you can instead right-click MyType and choose **Open**.
+   - Still stuck? Run `xattr -dr com.apple.quarantine /Applications/MyType.app` in Terminal, then open it again.
 3. Follow the in-app setup guide (about 3 minutes).
 
 ## How it works
