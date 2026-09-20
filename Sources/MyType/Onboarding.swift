@@ -105,7 +105,7 @@ final class StepArt: NSView {
                 bars(around: CGPoint(x: key.maxX + 84, y: c.y), count: 7, t: t + 1, spread: 12, height: 34, alpha: press)
             }
             text(held ? "Hold and talk" : (cyc >= 2.8 ? "Let go: your words appear" : "Press and hold Fn"),
-                 CGPoint(x: c.x, y: key.minY - 22), size: 12, color: .secondaryLabelColor)
+                 CGPoint(x: c.x, y: key.minY - 22), size: 12, color: .secondaryLabelColor, mono: true)
 
         case .tryIt:
             let cyc = t.truncatingRemainder(dividingBy: 6.5)
@@ -378,9 +378,9 @@ final class StepArt: NSView {
         case ..<tMy: caption = "4   Copy the key. It is only shown once"
         default: caption = "5   Paste it into MyType"
         }
-        text(caption, CGPoint(x: c.x, y: bounds.minY + 22), size: 12, weight: .semibold, color: .secondaryLabelColor)
+        text(caption, CGPoint(x: c.x, y: bounds.minY + 22), size: 12, weight: .semibold, color: .secondaryLabelColor, mono: true)
         text("Simplified illustration", CGPoint(x: bounds.maxX - 62, y: bounds.minY + 12), size: 8.5, weight: .regular,
-             color: NSColor.secondaryLabelColor.withAlphaComponent(0.7))
+             color: NSColor.secondaryLabelColor.withAlphaComponent(0.7), mono: true)
 
         drawPointer(keys, clicks, t)
     }
@@ -475,7 +475,7 @@ final class StepArt: NSView {
         if a > 0.3 { drawPointer(keys, [1.8], u) }
 
         let cap = switchOn ? "MyType is on for \(pane.caption)" : "Switch MyType on under \(pane.caption)"
-        text("\(idx + 1) of 3   " + cap, CGPoint(x: c.x, y: bounds.minY + 22), size: 12, weight: .semibold, color: .secondaryLabelColor)
+        text("\(idx + 1) of 3   " + cap, CGPoint(x: c.x, y: bounds.minY + 22), size: 12, weight: .semibold, color: .secondaryLabelColor, mono: true)
         for i in 0..<3 {
             (i == idx ? Theme.purple : NSColor.secondaryLabelColor.withAlphaComponent(0.3)).setFill()
             NSBezierPath(ovalIn: NSRect(x: c.x - 14 + CGFloat(i) * 12, y: bounds.minY + 8 - 4, width: 6, height: 6)).fill()

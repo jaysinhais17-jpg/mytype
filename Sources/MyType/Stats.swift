@@ -203,7 +203,7 @@ final class BarChart: NSView {
             (v.value <= 0 ? Theme.line : (today ? Theme.purple : Theme.purple.withAlphaComponent(0.42))).setFill()
             NSBezierPath(roundedRect: r, xRadius: 4, yRadius: 4).fill()
             if i == values.count - 1 || (i % 3 == 0 && i < values.count - 2) {
-                let s = NSAttributedString(string: v.label, attributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.tertiaryLabelColor])
+                let s = NSAttributedString(string: v.label, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor])
                 s.draw(at: NSPoint(x: r.midX - s.size().width / 2, y: plot.maxY + 3))
             }
         }
