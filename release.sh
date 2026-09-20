@@ -20,7 +20,7 @@ git add -A
 if git diff --cached --quiet; then echo "nothing new to commit"; else
   git commit -q -m "$MSG
 
-Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
+Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>"
 fi
 git push -q origin HEAD
 
