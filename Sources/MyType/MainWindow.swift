@@ -57,6 +57,14 @@ func makeLabel(_ s: String, size: CGFloat, weight: NSFont.Weight = .regular, col
     return t
 }
 
+/// The Usage page is mostly numbers and short notes, so its wrapped description text is monospaced too.
+func monoizeText(in view: NSView) {
+    if let t = view as? NSTextField, !t.isEditable, let f = t.font, !f.isFixedPitch {
+        t.font = uiFont(f.pointSize)
+    }
+    view.subviews.forEach(monoizeText)
+}
+
 /// Centre a label's text (labels inside a `vstack` are as wide as the stack, so this centres them).
 @discardableResult func centered(_ t: NSTextField) -> NSTextField { t.alignment = .center; return t }
 
@@ -1081,7 +1089,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             settingRow("Cleanup output, US$ per 1M tokens", "Defaults are a rough guess for Groq's Qwen models. Check your provider's pricing page and edit.",
                        field(outRateField, placeholder: "0.59", value: String(Usage.llmOutPerMillion), width: 90)),
         ])
-        return page([pageHeader("Usage", "What your API keys are costing, tracked on this Mac."), summary, table, rates])
+        let usagePage = page([pageHeader("Usage", "What your API keys are costing, tracked on this Mac."), summary, table, rates])
+        monoizeText(in: usagePage)
+        return usagePage
     }
 
     @objc private func refreshBalance() { DeepgramBalance.refresh(force: true) { [weak self] in self?.reloadUsage() } }
