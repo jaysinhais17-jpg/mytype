@@ -185,7 +185,16 @@ class PillButton: NSButton {
     }
     required init?(coder: NSCoder) { fatalError() }
     override var isHighlighted: Bool { didSet { restyle() } }
+    private var hovering = false { didSet { restyle() } }
     override func viewDidChangeEffectiveAppearance() { restyle() }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { hovering = true }
+    override func mouseExited(with event: NSEvent) { hovering = false }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override var intrinsicContentSize: NSSize { NSSize(width: super.intrinsicContentSize.width + 26, height: 32) }
     private func restyle() {
         let p = NSMutableParagraphStyle(); p.alignment = .center
@@ -194,9 +203,11 @@ class PillButton: NSButton {
             .foregroundColor: color, .font: NSFont.systemFont(ofSize: 13, weight: .medium), .paragraphStyle: p])
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let base: NSColor = primary ? Theme.purple : Theme.field
-            layer?.backgroundColor = (isHighlighted ? base.blended(withFraction: 0.25, of: .black) ?? base : base).cgColor
-            layer?.borderColor = Theme.line.cgColor
-            layer?.borderWidth = primary ? 0 : 1
+            var fill = base
+            if hovering && !isHighlighted { fill = primary ? (base.blended(withFraction: 0.12, of: .white) ?? base) : (base.blended(withFraction: 0.14, of: Theme.purple) ?? base) }
+            layer?.backgroundColor = (isHighlighted ? base.blended(withFraction: 0.25, of: .black) ?? base : fill).cgColor
+            layer?.borderColor = (hovering && !primary ? Theme.purple : Theme.line).cgColor
+            layer?.borderWidth = primary ? 0 : (hovering ? 1.5 : 1)
         }
     }
 }
@@ -212,17 +223,159 @@ final class HoldButton: PillButton {
     }
 }
 
+/// Slim pill toggle: purple when on, an outlined field when off, with a knob that slides.
 final class PurpleSwitch: NSControl {
-    var isOn = false { didSet { needsDisplay = true } }
-    override var intrinsicContentSize: NSSize { NSSize(width: 42, height: 24) }
-    override func draw(_ dirtyRect: NSRect) {
-        (isOn ? Theme.purple : NSColor.secondaryLabelColor.withAlphaComponent(0.35)).setFill()
-        NSBezierPath(roundedRect: bounds, xRadius: 12, yRadius: 12).fill()
-        let d: CGFloat = 20
-        NSColor.white.setFill()
-        NSBezierPath(ovalIn: NSRect(x: isOn ? bounds.width - d - 2 : 2, y: 2, width: d, height: d)).fill()
+    var isOn = false { didSet { if oldValue != isOn { update(animated: true) } } }
+    private let track = CALayer(), knob = CALayer(), label = CATextLayer()
+    private var hover = false { didSet { update(animated: true) } }
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.addSublayer(track); layer?.addSublayer(label); layer?.addSublayer(knob)
+        label.font = NSFont.monospacedSystemFont(ofSize: 10, weight: .semibold); label.fontSize = 10
+        label.alignmentMode = .center; label.contentsScale = NSScreen.main?.backingScaleFactor ?? 2
+        knob.shadowColor = NSColor.black.cgColor; knob.shadowOpacity = 0.28; knob.shadowRadius = 2; knob.shadowOffset = CGSize(width: 0, height: -1)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+        update(animated: false)
     }
+    required init?(coder: NSCoder) { fatalError() }
+    override var intrinsicContentSize: NSSize { NSSize(width: 64, height: 28) }
+    override func layout() { super.layout(); update(animated: false) }
+    override func viewDidChangeEffectiveAppearance() { update(animated: false) }
+    override func mouseEntered(with e: NSEvent) { hover = true }
+    override func mouseExited(with e: NSEvent) { hover = false }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
     override func mouseDown(with event: NSEvent) { isOn.toggle(); sendAction(action, to: target) }
+
+    private func update(animated: Bool) {
+        CATransaction.begin()
+        CATransaction.setDisableActions(!animated)
+        CATransaction.setAnimationDuration(0.18)
+        CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(name: CAMediaTimingFunctionName.easeInEaseOut))
+        track.frame = bounds
+        track.cornerRadius = bounds.height / 2
+        let d = bounds.height - 6
+        knob.frame = NSRect(x: isOn ? bounds.width - d - 3 : 3, y: 3, width: d, height: d)
+        knob.cornerRadius = d / 2
+        let textW = bounds.width - d - 12
+        label.frame = NSRect(x: isOn ? 6 : d + 6, y: (bounds.height - 13) / 2, width: textW, height: 13)
+        label.string = isOn ? "ON" : "OFF"
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            if isOn {
+                track.backgroundColor = (hover ? Theme.purple.blended(withFraction: 0.15, of: .white) ?? Theme.purple : Theme.purple).cgColor
+                track.borderColor = NSColor.clear.cgColor
+                knob.backgroundColor = NSColor.white.cgColor
+                label.foregroundColor = NSColor.white.cgColor
+            } else {
+                track.backgroundColor = Theme.field.cgColor
+                track.borderColor = (hover ? Theme.purple.withAlphaComponent(0.55) : Theme.line).cgColor
+                knob.backgroundColor = (hover ? NSColor.labelColor.withAlphaComponent(0.75) : NSColor.secondaryLabelColor).cgColor
+                label.foregroundColor = NSColor.secondaryLabelColor.cgColor
+            }
+            track.borderWidth = 1
+        }
+        CATransaction.commit()
+    }
+}
+
+/// Option list shown by PillPopup: mono text, purple highlight instead of the system blue.
+final class PillList: NSView {
+    private var rows: [PillRow] = []
+    init(titles: [String], selected: Int, width: CGFloat, pick: @escaping (Int) -> Void) {
+        super.init(frame: NSRect(x: 0, y: 0, width: max(width, 200), height: CGFloat(titles.count) * 32 + 12))
+        for (i, t) in titles.enumerated() {
+            let r = PillRow(title: t, selected: i == selected) { pick(i) }
+            r.frame = NSRect(x: 6, y: bounds.height - 6 - CGFloat(i + 1) * 32, width: bounds.width - 12, height: 32)
+            r.autoresizingMask = [.width]
+            addSubview(r); rows.append(r)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError() }
+}
+
+final class PillRow: NSView {
+    private let title: String, selected: Bool, onPick: () -> Void
+    private var hover = false { didSet { needsDisplay = true } }
+    init(title: String, selected: Bool, onPick: @escaping () -> Void) {
+        self.title = title; self.selected = selected; self.onPick = onPick
+        super.init(frame: .zero)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func mouseEntered(with e: NSEvent) { hover = true }
+    override func mouseExited(with e: NSEvent) { hover = false }
+    override func mouseDown(with e: NSEvent) { onPick() }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+    override func draw(_ dirtyRect: NSRect) {
+        if hover || selected {
+            Theme.purple.withAlphaComponent(hover ? 0.22 : 0.10).setFill()
+            NSBezierPath(roundedRect: bounds, xRadius: 8, yRadius: 8).fill()
+        }
+        let a: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: NSColor.labelColor]
+        let h = title.size(withAttributes: a).height
+        title.draw(at: CGPoint(x: 10, y: bounds.midY - h / 2), withAttributes: a)
+        if selected, let img = NSImage(systemSymbolName: "checkmark", accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .bold).applying(.init(paletteColors: [Theme.purple]))) {
+            img.draw(in: NSRect(x: bounds.maxX - 12 - img.size.width, y: bounds.midY - img.size.height / 2, width: img.size.width, height: img.size.height))
+        }
+    }
+}
+
+/// Dropdown drawn to match the input boxes: flat rounded field, purple chevron, tint on hover. The menu itself is still the system one.
+final class PillPopup: NSPopUpButton {
+    private var hover = false { didSet { needsDisplay = true } }
+
+    override init(frame: NSRect, pullsDown: Bool) {
+        super.init(frame: frame, pullsDown: pullsDown)
+        isBordered = false
+        font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        translatesAutoresizingMaskIntoConstraints = false
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var intrinsicContentSize: NSSize { NSSize(width: NSView.noIntrinsicMetric, height: 34) }
+    override func mouseEntered(with e: NSEvent) { hover = true }
+    override func mouseExited(with e: NSEvent) { hover = false }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .pointingHand) }
+
+    private var popover: NSPopover?
+    override func mouseDown(with event: NSEvent) {
+        guard isEnabled else { return }
+        if let p = popover, p.isShown { p.close(); return }
+        let list = PillList(titles: itemTitles, selected: indexOfSelectedItem, width: bounds.width) { [weak self] i in
+            guard let self else { return }
+            self.popover?.close()
+            self.selectItem(at: i)
+            self.sendAction(self.action, to: self.target)
+        }
+        let pop = NSPopover()
+        pop.behavior = .transient; pop.animates = false
+        pop.contentViewController = { let c = NSViewController(); c.view = list; return c }()
+        pop.show(relativeTo: bounds, of: self, preferredEdge: .minY)
+        popover = pop
+    }
+
+    override func draw(_ dirtyRect: NSRect) {
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 10, yRadius: 10)
+        (hover ? Theme.purple.withAlphaComponent(0.07).blended(withFraction: 0.5, of: Theme.field) ?? Theme.field : Theme.field).setFill()
+        path.fill()
+        (hover ? Theme.purple.withAlphaComponent(0.45) : Theme.line).setStroke()
+        path.lineWidth = 1; path.stroke()
+
+        let cfg = NSImage.SymbolConfiguration(pointSize: 10, weight: .semibold).applying(.init(paletteColors: [Theme.purple]))
+        var textRight = bounds.maxX - 12
+        if let img = NSImage(systemSymbolName: "chevron.up.chevron.down", accessibilityDescription: nil)?.withSymbolConfiguration(cfg) {
+            let s = img.size
+            img.draw(in: NSRect(x: bounds.maxX - 12 - s.width, y: bounds.midY - s.height / 2, width: s.width, height: s.height))
+            textRight -= s.width + 8
+        }
+        let p = NSMutableParagraphStyle(); p.lineBreakMode = .byTruncatingTail
+        let a: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedSystemFont(ofSize: 13, weight: .regular), .foregroundColor: NSColor.labelColor, .paragraphStyle: p]
+        let t = titleOfSelectedItem ?? ""
+        let h = t.size(withAttributes: a).height
+        t.draw(in: NSRect(x: 12, y: bounds.midY - h / 2, width: max(0, textRight - 12), height: h), withAttributes: a)
+    }
 }
 
 final class NavButton: NSButton {
@@ -369,7 +522,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let moneyValue = makeLabel("$0", size: 34), moneyNote = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
     private let planField = InputField()
     private let heroTitle = makeLabel("", size: 15, weight: .semibold), heroBody = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
-    private let fnPopup = NSPopUpButton(), optionPopup = NSPopUpButton()
+    private let fnPopup = PillPopup(frame: .zero, pullsDown: false), optionPopup = PillPopup(frame: .zero, pullsDown: false)
     private let nameField = InputField()
     private var greetingTitle: NSTextField?
     private let typeView = NSTextView(), typePassage = NSTextField(wrappingLabelWithString: "")
@@ -387,12 +540,12 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private var newWordField: NSTextField?
     private var words: [String] = []
     private let snipView = NSTextView()
-    private let aiSwitch = PurpleSwitch(), langSwitch = PurpleSwitch(), loginSwitch = PurpleSwitch(), chipSwitch = PurpleSwitch()
+    private let aiSwitch = PurpleSwitch(frame: .zero), langSwitch = PurpleSwitch(frame: .zero), loginSwitch = PurpleSwitch(frame: .zero), chipSwitch = PurpleSwitch(frame: .zero)
     private let dgField = SecureInputField(), llmKeyField = SecureInputField()
     private let llmURLField = InputField(), llmModelField = InputField()
-    private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let stylePopup = NSPopUpButton(frame: .zero, pullsDown: false)
-    private let appearancePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let presetPopup = PillPopup(frame: .zero, pullsDown: false)
+    private let stylePopup = PillPopup(frame: .zero, pullsDown: false)
+    private let appearancePopup = PillPopup(frame: .zero, pullsDown: false)
     private let statusLabel = makeLabel("", size: 11, weight: .medium)
     private let engineLabel = makeLabel("", size: 11, color: .secondaryLabelColor)
     private let statusDot = makeLabel("●", size: 10, color: .systemOrange)
@@ -405,7 +558,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     var onSetup: (() -> Void)?
     private var usageCells: [[NSTextField]] = []
     private let dgRateField = InputField(), inRateField = InputField(), outRateField = InputField(), creditField = InputField()
-    private let cleanupFreeSwitch = PurpleSwitch()
+    private let cleanupFreeSwitch = PurpleSwitch(frame: .zero)
     private let rateField = InputField()
     /// The three cost tiles shown on both Home and Usage. Each page needs its own labels.
     private struct CostTiles {
@@ -437,7 +590,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             CGRequestListenEventAccess()
             openPane("Privacy_ListenEvent")
         }
-        keyRow = CheckRow(title: "Fn key detected", detail: "Press Fn once. Set System Settings → Keyboard → “Press 🌐 key to” → Do Nothing.", action: nil)
+        keyRow = CheckRow(title: "Fn key detected", detail: "Press Fn once. Set System Settings → Keyboard → “Press fn key to” → Do Nothing.", action: nil)
 
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 900, height: 660),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
@@ -697,16 +850,13 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         chartCard.heightAnchor.constraint(equalTo: moneyCard.heightAnchor).isActive = true
 
         // ---- how to dictate + try it
-        // Current MacBook Air key: globe top-right, small "fn" bottom-left.
+        // Our own generic key, not tied to any one keyboard: a centred "fn" in the app's mono face.
         let keycap = Surface(fill: Theme.card, stroke: Theme.line, radius: 9)
-        let fn = makeLabel("fn", size: 12, weight: .medium)
-        let globe = NSImageView(image: NSImage(systemSymbolName: "globe", accessibilityDescription: "Globe")?
-            .withSymbolConfiguration(.init(pointSize: 13, weight: .regular)) ?? NSImage())
-        globe.contentTintColor = .secondaryLabelColor
-        for v in [fn, globe] { keycap.addSubview(v); v.translatesAutoresizingMaskIntoConstraints = false }
+        let fn = makeLabel("fn", size: 15, weight: .semibold)
+        fn.font = NSFont.monospacedSystemFont(ofSize: 15, weight: .semibold)
+        keycap.addSubview(fn); fn.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([keycap.widthAnchor.constraint(equalToConstant: 56), keycap.heightAnchor.constraint(equalToConstant: 46),
-                                     fn.leadingAnchor.constraint(equalTo: keycap.leadingAnchor, constant: 8), fn.bottomAnchor.constraint(equalTo: keycap.bottomAnchor, constant: -6),
-                                     globe.trailingAnchor.constraint(equalTo: keycap.trailingAnchor, constant: -7), globe.topAnchor.constraint(equalTo: keycap.topAnchor, constant: 6)])
+                                     fn.centerXAnchor.constraint(equalTo: keycap.centerXAnchor), fn.centerYAnchor.constraint(equalTo: keycap.centerYAnchor)])
         let big = heroTitle, small = heroBody
         updateHero()
         centered(big); centered(small)
@@ -999,10 +1149,10 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             pop.addItems(withTitles: KeyMode.allCases.map(\.title))
             pop.selectItem(at: mode.rawValue)
             pop.target = self; pop.action = #selector(pickShortcut(_:))
-            pop.widthAnchor.constraint(equalToConstant: 270).isActive = true
+            pop.widthAnchor.constraint(equalToConstant: 380).isActive = true
         }
         let shortcuts = card([sectionTitle("Shortcuts", symbol: "keyboard")] + spaced([
-            settingRow("Fn (Globe) key", "Set “Press 🌐 key to” to Do Nothing in System Settings › Keyboard so macOS leaves it alone.", fnPopup),
+            settingRow("Fn key", "Set “Press fn key to” to Do Nothing in System Settings › Keyboard so macOS leaves it alone.", fnPopup),
             settingRow("Right Option key", "A single tap avoids the double-tap that macOS and other apps often claim. Pressing Option with another key never dictates.", optionPopup),
         ]) + [centered(makeLabel("Hands-free keeps listening until you tap the key once more.", size: 11, color: .secondaryLabelColor, wrap: true))], spacing: 16)
         let setupBtn = PillButton(title: "Open setup guide", primary: false)
