@@ -45,6 +45,8 @@ VERSION=1.0 ./package.sh     # build build/MyType.dmg
 
 Needs Xcode command line tools (`swiftc`).
 
+Publishing a new build (maintainers): `./release.sh "what changed"` commits, pushes, rebuilds the DMG and replaces it on the GitHub release. Add a version (`./release.sh "what changed" 1.1`) to cut a new release.
+
 ## License
 
 See [LICENSE](LICENSE).
