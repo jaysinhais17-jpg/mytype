@@ -1,6 +1,6 @@
 import Foundation
 
-/// Owns a long-lived whisper-server child process so the model stays warm in memory.
+/// Owns the whisper-server child process. It stays warm when it's the main engine; with Deepgram it's loaded on demand.
 final class Transcriber {
     private var process: Process?
     private let base = URL(string: "http://127.0.0.1:\(Config.serverPort)")!
@@ -10,9 +10,20 @@ final class Transcriber {
         UserDefaults.standard.string(forKey: "language") ?? "en"
     }
 
+    /// Whether on-device speech is installed at all (binary + model), loaded or not.
+    static var available: Bool {
+        Config.serverBinary != nil && FileManager.default.fileExists(atPath: Config.modelPath)
+    }
+
+    private var waiters: [(Bool) -> Void] = []
+
+    /// Main thread only. Safe to call while already starting or ready: every caller gets one callback.
     func startServer(onReady: @escaping (Bool) -> Void) {
-        guard let bin = Config.serverBinary else { onReady(false); return }
-        guard FileManager.default.fileExists(atPath: Config.modelPath) else { onReady(false); return }
+        if ready, process?.isRunning == true { onReady(true); return }
+        waiters.append(onReady)
+        guard waiters.count == 1 else { return }
+        ready = false
+        guard Transcriber.available, let bin = Config.serverBinary else { settle(false); return }
         killStrays()
 
         let p = Process()
@@ -25,27 +36,46 @@ final class Transcriber {
         ]
         p.standardOutput = FileHandle.nullDevice
         p.standardError = FileHandle.nullDevice
-        do { try p.run() } catch { onReady(false); return }
+        do { try p.run() } catch { settle(false); return }
         process = p
 
         // Poll until the server answers (first launch compiles Metal shaders, ~20s).
         DispatchQueue.global().async { [weak self] in
-            guard let self else { return }
-            for _ in 0..<180 {
-                if self.ping() { self.ready = true; DispatchQueue.main.async { onReady(true) }; return }
+            var ok = false
+            for _ in 0..<180 where p.isRunning {
+                if self?.ping() == true { ok = true; break }
                 Thread.sleep(forTimeInterval: 0.5)
             }
-            DispatchQueue.main.async { onReady(false) }
+            DispatchQueue.main.async {
+                guard let self, self.process === p else { return } // stopped or restarted meanwhile
+                self.ready = ok
+                self.settle(ok)
+            }
         }
+    }
+
+    /// Loads the model if it isn't already (a few seconds), for callers that need it right now.
+    func ensureReady() async -> Bool {
+        await withCheckedContinuation { c in
+            DispatchQueue.main.async { self.startServer { c.resume(returning: $0) } }
+        }
+    }
+
+    private func settle(_ ok: Bool) {
+        let w = waiters
+        waiters = []
+        w.forEach { $0(ok) }
     }
 
     func stopServer() {
         process?.terminate()
         process = nil
         ready = false
+        settle(false)
     }
 
-    private func killStrays() {
+    /// A force-quit or reinstall can orphan the old server (and its ~640 MB); also run at launch.
+    func killStrays() {
         let k = Process()
         k.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
         k.arguments = ["-f", "whisper-server.*--port \(Config.serverPort)"]

@@ -85,14 +85,7 @@ final class App: NSObject, NSApplicationDelegate {
         if let forced = ProcessInfo.processInfo.environment["MYTYPE_SETUP"] { onboarding.show(step: Int(forced) ?? 0) }
         else if !UserDefaults.standard.bool(forKey: "onboarded") && !Cloud.useDeepgram { onboarding.show() } else { window.show() }
 
-        transcriber.startServer { [weak self] ok in
-            guard let self else { return }
-            // The on-device model is optional: with a Deepgram key the app is fine, so keep the normal mic icon.
-            self.setIcon(ok || Cloud.useDeepgram ? "mic" : "exclamationmark.triangle")
-            self.localFailed = !ok
-            self.updateStatus()
-        }
-
+        transcriber.killStrays()
         refreshAI()
 
         Updater.onChange = { [weak self] in
@@ -103,16 +96,45 @@ final class App: NSObject, NSApplicationDelegate {
     }
 
     private var localFailed = false
+    /// True while a dictation is being transcribed on-device, so the idle timer doesn't pull the model away.
+    private var localBusy = false
+    private var streamingLocal = false
     /// Ready if either the on-device model is loaded or a Deepgram key lets us stream (so the local model is optional).
     private func updateStatus() {
-        if transcriber.ready || Cloud.useDeepgram { statusLine.title = "Ready" }
+        if transcriber.ready || Cloud.useDeepgram || (Transcriber.available && !localFailed) { statusLine.title = "Ready" }
         else if localFailed { statusLine.title = "Add a Deepgram key in Settings (or install whisper-cpp for on-device speech)" }
+    }
+
+    /// The on-device model costs ~640 MB while loaded. Without a Deepgram key it's the engine, so keep it warm;
+    /// with one it's only the offline fallback, so it's loaded on demand and dropped again once idle.
+    private func refreshSpeech() {
+        if Cloud.useDeepgram { releaseLocalLater(); return }
+        localIdle?.cancel(); localIdle = nil
+        guard !transcriber.ready else { return }
+        transcriber.startServer { [weak self] ok in
+            guard let self else { return }
+            if !self.recording { self.setIcon(ok || Cloud.useDeepgram ? "mic" : "exclamationmark.triangle") }
+            self.localFailed = !ok
+            self.updateStatus()
+        }
+    }
+
+    private var localIdle: DispatchWorkItem?
+    private func releaseLocalLater() {
+        localIdle?.cancel()
+        let w = DispatchWorkItem { [weak self] in
+            guard let self, Cloud.useDeepgram else { return }
+            if self.recording || self.localBusy { self.releaseLocalLater() } else { self.transcriber.stopServer() }
+        }
+        localIdle = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + 600, execute: w)
     }
 
     var engineText: String { Cloud.useDeepgram ? "Speech: Deepgram" : "Speech: on-device" }
 
     /// Called at launch and whenever the toggle or cloud keys change.
     func refreshAI() {
+        refreshSpeech()
         updateStatus()
         if !aiEnabled { stopPolisher() }
         else if Cloud.useLLM { polisher.stop(); llmLine.title = "AI cleanup ready (cloud)" }
@@ -289,7 +311,7 @@ final class App: NSObject, NSApplicationDelegate {
         case .notDetermined: AVCaptureDevice.requestAccess(for: .audio) { _ in }; return
         default: break
         }
-        guard transcriber.ready || (Cloud.useDeepgram && Net.online) else { startFailed(showWindow: !Cloud.useDeepgram); return }
+        guard transcriber.ready || (Cloud.useDeepgram && Net.online) || Transcriber.available else { startFailed(showWindow: !Cloud.useDeepgram); return }
         do {
             try recorder.start()
             recording = true
@@ -303,7 +325,10 @@ final class App: NSObject, NSApplicationDelegate {
                 let d = DeepgramSession(recorder: recorder)
                 d.start(language: transcriber.language == "auto" ? "multi" : "en")
                 deepgram = d
-            } else { streamer.start() }
+            } else if transcriber.ready {
+                streamingLocal = true
+                streamer.start()
+            } else { transcriber.startServer { _ in } } // model loads while you talk; finish() waits for it
             setIcon("waveform.circle.fill")
             let show = DispatchWorkItem { [weak self] in
                 self?.hud.set(.listening)
@@ -316,7 +341,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     private func cancelRecording() {
         hudWork?.cancel(); hudWork = nil
-        recording = false; locked = false
+        recording = false; locked = false; streamingLocal = false
         _ = recorder.stop()
         streamer.cancel()
         deepgram?.cancel(); deepgram = nil
@@ -331,7 +356,7 @@ final class App: NSObject, NSApplicationDelegate {
         let samples = recorder.stop()
         let secs = Double(samples.count) / Config.sampleRate
         guard secs >= Config.minSeconds, Audio.rms(samples) > Config.silenceRMS else {
-            streamer.cancel(); deepgram?.cancel(); deepgram = nil; setIcon("mic"); hud.set(.hidden); return
+            streamer.cancel(); streamingLocal = false; deepgram?.cancel(); deepgram = nil; setIcon("mic"); hud.set(.hidden); return
         }
         setIcon("ellipsis.circle")
         hud.set(.working)
@@ -339,15 +364,20 @@ final class App: NSObject, NSApplicationDelegate {
         let began = startApp
         let beganFocus = startFocus
         let dg = deepgram; deepgram = nil
+        let streamed = streamingLocal; streamingLocal = false
         let t0 = Date()
         Task {
             defer { DispatchQueue.main.async { self.setIcon("mic"); self.hud.set(.hidden) } }
             let raw: String
             var engine = "local"
-            if let dg {
-                if let t = await dg.finish(allSamples: samples) { raw = t; engine = "deepgram" }
-                else { raw = await streamer.transcribeAll(samples); engine = "local (deepgram failed)" }
-            } else { raw = await streamer.finish(allSamples: samples) }
+            if let dg, let t = await dg.finish(allSamples: samples) { raw = t; engine = "deepgram" }
+            else {
+                if dg != nil { engine = "local (deepgram failed)" }
+                await MainActor.run { self.localBusy = true }
+                if streamed { raw = await streamer.finish(allSamples: samples) }
+                else { raw = await transcriber.ensureReady() ? await streamer.transcribeAll(samples) : "" }
+                await MainActor.run { self.localBusy = false; if Cloud.useDeepgram { self.releaseLocalLater() } }
+            }
             let t1 = Date()
             if engine == "deepgram" { Usage.add(UsageEvent(date: Date(), audioSeconds: secs)) }
             if TextCleaner.isUndoCommand(raw) {
