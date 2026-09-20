@@ -23,6 +23,8 @@ final class App: NSObject, NSApplicationDelegate {
     private var pressStart = Date()
     private var lastTapUp = Date.distantPast
     private var hudWork: DispatchWorkItem?
+    /// Cloud cleanup started at the last pause, while the key was still down. Used if the final transcript matches its input.
+    private var headStart: (input: String, task: Task<String, Never>)?
     private let statusLine = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
     private let llmLine = NSMenuItem(title: "AI cleanup: loading…", action: nil, keyEquivalent: "")
     private let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: "")
@@ -323,6 +325,7 @@ final class App: NSObject, NSApplicationDelegate {
             if Cloud.aiReady { CloudPolisher.warm() }
             if Cloud.useDeepgram && Net.online {
                 let d = DeepgramSession(recorder: recorder)
+                if aiEnabled && Cloud.useLLM { d.onPause = { [weak self] raw in self?.polishAhead(raw) } }
                 d.start(language: transcriber.language == "auto" ? "multi" : "en")
                 deepgram = d
             } else if transcriber.ready {
@@ -339,7 +342,21 @@ final class App: NSObject, NSApplicationDelegate {
         } catch { startFailed(showWindow: false) }
     }
 
+    /// People usually stop talking a beat before they let go of the key, so cleanup of the text so far starts at
+    /// every pause. If nothing more was said by key-up, the answer is already on its way (or back).
+    private func polishAhead(_ raw: String) {
+        guard recording, Net.online, !TextCleaner.isUndoCommand(raw) else { return }
+        let cleaned = TextCleaner.clean(raw)
+        guard !cleaned.isEmpty, headStart?.input != cleaned else { return }
+        headStart?.task.cancel()
+        let p = cloudPolisher
+        headStart = (cleaned, Task { await p.polish(cleaned) })
+    }
+
+    private func dropHeadStart() { headStart?.task.cancel(); headStart = nil }
+
     private func cancelRecording() {
+        dropHeadStart()
         hudWork?.cancel(); hudWork = nil
         recording = false; locked = false; streamingLocal = false
         _ = recorder.stop()
@@ -356,7 +373,7 @@ final class App: NSObject, NSApplicationDelegate {
         let samples = recorder.stop()
         let secs = Double(samples.count) / Config.sampleRate
         guard secs >= Config.minSeconds, Audio.rms(samples) > Config.silenceRMS else {
-            streamer.cancel(); streamingLocal = false; deepgram?.cancel(); deepgram = nil; setIcon("mic"); hud.set(.hidden); return
+            dropHeadStart(); streamer.cancel(); streamingLocal = false; deepgram?.cancel(); deepgram = nil; setIcon("mic"); hud.set(.hidden); return
         }
         setIcon("ellipsis.circle")
         hud.set(.working)
@@ -364,10 +381,14 @@ final class App: NSObject, NSApplicationDelegate {
         let began = startApp
         let beganFocus = startFocus
         let dg = deepgram; deepgram = nil
+        dg?.onPause = nil
+        let ahead = headStart; headStart = nil
         let streamed = streamingLocal; streamingLocal = false
         let t0 = Date()
         Task {
             defer { DispatchQueue.main.async { self.setIcon("mic"); self.hud.set(.hidden) } }
+            var usedAhead = false
+            defer { if !usedAhead { ahead?.task.cancel() } }
             let raw: String
             var engine = "local"
             if let dg, let t = await dg.finish(allSamples: samples) { raw = t; engine = "deepgram" }
@@ -387,14 +408,17 @@ final class App: NSObject, NSApplicationDelegate {
             var cleaned = TextCleaner.clean(raw)
             guard !cleaned.isEmpty else { return }
             if useAI {
-                if Cloud.useLLM { if Net.online { cleaned = await cloudPolisher.polish(cleaned) } }
+                if Cloud.useLLM {
+                    if let ahead, ahead.input == cleaned { usedAhead = true; cleaned = await ahead.task.value }
+                    else if Net.online { cleaned = await cloudPolisher.polish(cleaned) }
+                }
                 else { cleaned = await polisher.polish(cleaned) }
             }
             let text = TextCleaner.expandSnippets(cleaned)
             let t2 = Date()
             Log.write(String(format: "speech %.2fs (%@) · cleanup %.2fs (%@) · total %.2fs · %.1fs audio",
                              t1.timeIntervalSince(t0), engine,
-                             t2.timeIntervalSince(t1), useAI ? (Cloud.useLLM ? (Net.online ? "cloud" : "skipped, offline") : "local") : "off",
+                             t2.timeIntervalSince(t1), useAI ? (Cloud.useLLM ? (usedAhead ? "cloud, head start" : Net.online ? "cloud" : "skipped, offline") : "local") : "off",
                              t2.timeIntervalSince(t0), secs))
             await MainActor.run {
                 // Inside our own window, type straight into the "Try it" box. Otherwise the text goes to the cursor only

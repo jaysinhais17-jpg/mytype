@@ -12,7 +12,6 @@ final class Streamer {
 
     private let sr = Int(Config.sampleRate)
     private let minChunk = 2.5, maxChunk = 8.5, pause = 0.6
-    private let pauseRMS: Float = 0.006
 
     init(recorder: Recorder, transcriber: Transcriber) {
         self.recorder = recorder
@@ -36,7 +35,7 @@ final class Streamer {
         let pending = recorder.snapshot(from: committed)
         guard Double(pending.count) / Double(sr) >= minChunk else { return }
         let tail = pending.suffix(Int(pause * Double(sr)))
-        if Audio.rms(Array(tail)) < pauseRMS {
+        if Audio.rms(Array(tail)) < Config.pauseRMS {
             commit(pending.count, of: pending)
         } else if Double(pending.count) / Double(sr) > maxChunk {
             commit(quietestCut(pending), of: pending)

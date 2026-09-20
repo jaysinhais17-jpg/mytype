@@ -47,6 +47,9 @@ final class DeepgramSession {
     private var finals: [String] = []
     private var sent = 0
     private var finalizeDone = false
+    private var dirty = false
+    /// Called on the main thread with the transcript so far whenever the speaker pauses, so cleanup can get a head start.
+    var onPause: ((String) -> Void)?
 
     init(recorder: Recorder) { self.recorder = recorder }
 
@@ -75,14 +78,21 @@ final class DeepgramSession {
             guard case .string(let s) = msg, let d = s.data(using: .utf8),
                   let j = try? JSONSerialization.jsonObject(with: d) as? [String: Any],
                   j["type"] as? String == "Results", j["is_final"] as? Bool == true else { continue }
-            if j["from_finalize"] as? Bool == true { finalizeDone = true }
-            guard let alt = ((j["channel"] as? [String: Any])?["alternatives"] as? [[String: Any]])?.first,
-                  let text = alt["transcript"] as? String, !text.isEmpty else { continue }
-            finals.append(text)
+            let text = (((j["channel"] as? [String: Any])?["alternatives"] as? [[String: Any]])?.first?["transcript"] as? String) ?? ""
+            let last = j["from_finalize"] as? Bool == true
+            await MainActor.run {
+                if !text.isEmpty { self.finals.append(text); self.dirty = true }
+                if last { self.finalizeDone = true }
+            }
         }
     }
 
-    private func pump() { sendNew(recorder.snapshot(from: sent)) }
+    private func pump() {
+        sendNew(recorder.snapshot(from: sent))
+        guard dirty, let onPause, Audio.rms(recorder.tail(Int(Config.sampleRate * 0.4))) < Config.pauseRMS else { return }
+        dirty = false
+        onPause(finals.joined(separator: " "))
+    }
 
     private func sendNew(_ chunk: [Float]) {
         guard !chunk.isEmpty else { return }
@@ -114,6 +124,7 @@ final class DeepgramSession {
         receiver?.cancel()
         task?.cancel(with: .normalClosure, reason: nil)
         task = nil
+        let finals = await MainActor.run { self.finals }
         return finals.isEmpty ? nil : finals.joined(separator: " ")
     }
 }

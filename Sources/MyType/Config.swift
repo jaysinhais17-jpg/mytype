@@ -18,6 +18,7 @@ enum Config {
     static let doubleTapSeconds = 0.4  // second tap within this = hands-free
     static let minSeconds = 0.35
     static let silenceRMS: Float = 0.004
+    static let pauseRMS: Float = 0.006  // quieter than this = a pause between phrases
 
     static var serverBinary: String? {
         ["/opt/homebrew/bin/whisper-server", "/usr/local/bin/whisper-server"]

@@ -54,6 +54,12 @@ final class Recorder {
         return index < samples.count ? Array(samples[index...]) : []
     }
 
+    /// The most recent `count` samples (safe to call while recording).
+    func tail(_ count: Int) -> [Float] {
+        lock.lock(); defer { lock.unlock() }
+        return Array(samples.suffix(count))
+    }
+
     func stop() -> [Float] {
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
