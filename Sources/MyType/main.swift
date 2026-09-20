@@ -25,6 +25,7 @@ final class App: NSObject, NSApplicationDelegate {
     private var hudWork: DispatchWorkItem?
     private let statusLine = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
     private let llmLine = NSMenuItem(title: "AI cleanup: loading…", action: nil, keyEquivalent: "")
+    private let updateItem = NSMenuItem(title: "Check for Updates…", action: #selector(checkUpdates), keyEquivalent: "")
     private let aiItem = NSMenuItem(title: "AI cleanup", action: #selector(toggleAIMenu), keyEquivalent: "")
     private let recentItem = NSMenuItem(title: "Recent dictations", action: nil, keyEquivalent: "")
     private let recentMenu = NSMenu()
@@ -93,6 +94,12 @@ final class App: NSObject, NSApplicationDelegate {
         }
 
         refreshAI()
+
+        Updater.onChange = { [weak self] in
+            guard let self else { return }
+            self.updateItem.title = Updater.available.map { "Update to \($0.version)…" } ?? "Check for Updates…"
+        }
+        Updater.startAutoChecks { [weak self] in self?.recording ?? false }
     }
 
     private var localFailed = false
@@ -161,6 +168,8 @@ final class App: NSObject, NSApplicationDelegate {
         loginItem.target = self; loginItem.state = loginEnabled ? .on : .off
         m.addItem(loginItem)
         m.addItem(.separator())
+        updateItem.target = self
+        m.addItem(updateItem)
         m.addItem(NSMenuItem(title: "Quit MyType", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q"))
         statusItem.menu = m
     }
@@ -183,6 +192,9 @@ final class App: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = main
     }
 
+    @objc private func checkUpdates() {
+        if let r = Updater.available { Updater.offer(r) } else { Updater.check(manual: true) }
+    }
     @objc private func openWindow() { window?.show() }
     @objc private func copyLastDictation() { if let t = Recall.lastText { Recall.copy(t) } }
     @objc private func copyRecent(_ item: NSMenuItem) { if let t = item.representedObject as? String { Recall.copy(t) } }

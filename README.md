@@ -47,6 +47,8 @@ Needs Xcode command line tools (`swiftc`).
 
 Publishing a new build (maintainers): `./release.sh "what changed"` commits, pushes, rebuilds the DMG and replaces it on the GitHub release. Add a version (`./release.sh "what changed" 1.1`) to cut a new release.
 
+MyType checks GitHub for new releases on launch and can update itself (menu bar icon > Check for Updates).
+
 ## License
 
 See [LICENSE](LICENSE).

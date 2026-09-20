@@ -2,7 +2,7 @@
 # Build a shareable MyType.dmg (Apple Silicon). Users add their own API keys inside the app.
 set -euo pipefail
 cd "$(dirname "$0")"
-[ -n "${SKIP_BUILD:-}" ] || VERSION="${VERSION:-1.0}" ./bundle.sh
+[ -n "${SKIP_BUILD:-}" ] || ./bundle.sh
 STAGE=build/dmg; RW=build/MyType-rw.dmg; OUT=build/MyType.dmg
 rm -rf "$STAGE" "$RW" "$OUT"; mkdir -p "$STAGE"
 cp -R build/MyType.app "$STAGE/"
