@@ -630,7 +630,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         priceRow.setViews([makeLabel("Compared with a subscription at R/month", size: 12, color: .secondaryLabelColor), planField], in: .center)
         centered(moneyValue); centered(moneyNote)
         let moneyCard = card([centered(makeLabel("Money saved", size: 15, weight: .semibold)), moneyValue, moneyNote, priceRow], spacing: 8)
-        let mid = NSStackView(views: [chartCard, moneyCard]); mid.spacing = 12; mid.alignment = .top
+        let mid = NSStackView(views: [chartCard, moneyCard]); mid.spacing = 12; mid.alignment = .top; mid.distribution = .fill
         chartCard.widthAnchor.constraint(equalTo: moneyCard.widthAnchor, multiplier: 1.6).isActive = true
         chartCard.heightAnchor.constraint(equalTo: moneyCard.heightAnchor).isActive = true
 
