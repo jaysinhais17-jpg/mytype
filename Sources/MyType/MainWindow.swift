@@ -52,7 +52,7 @@ enum Theme {
 
 func makeLabel(_ s: String, size: CGFloat, weight: NSFont.Weight = .regular, color: NSColor = .labelColor, wrap: Bool = false) -> NSTextField {
     let t = wrap ? NSTextField(wrappingLabelWithString: s) : NSTextField(labelWithString: s)
-    t.font = .systemFont(ofSize: size, weight: weight)
+    t.font = wrap ? .systemFont(ofSize: size, weight: weight) : uiFont(size, weight)
     t.textColor = color
     return t
 }
@@ -60,9 +60,14 @@ func makeLabel(_ s: String, size: CGFloat, weight: NSFont.Weight = .regular, col
 /// Centre a label's text (labels inside a `vstack` are as wide as the stack, so this centres them).
 @discardableResult func centered(_ t: NSTextField) -> NSTextField { t.alignment = .center; return t }
 
-/// Headlines and big numbers: medium-weight system display face, like Typeless's geometric headlines.
+/// Interface text (titles, labels, buttons, numbers) is monospaced, like the input fields; paragraphs stay in the system face.
+func uiFont(_ size: CGFloat, _ weight: NSFont.Weight = .regular) -> NSFont {
+    NSFont.monospacedSystemFont(ofSize: size, weight: weight)
+}
+
+/// Headlines and big numbers.
 func serifFont(_ size: CGFloat, weight: NSFont.Weight = .medium) -> NSFont {
-    NSFont.systemFont(ofSize: size, weight: weight)
+    uiFont(size, weight)
 }
 
 /// Rounded, dynamically coloured panel.
@@ -200,7 +205,7 @@ class PillButton: NSButton {
         let p = NSMutableParagraphStyle(); p.alignment = .center
         let color: NSColor = primary ? .white : .labelColor
         attributedTitle = NSAttributedString(string: caption, attributes: [
-            .foregroundColor: color, .font: NSFont.systemFont(ofSize: 13, weight: .medium), .paragraphStyle: p])
+            .foregroundColor: color, .font: uiFont(12, .medium), .paragraphStyle: p])
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let base: NSColor = primary ? Theme.purple : Theme.field
             var fill = base
@@ -384,8 +389,16 @@ final class NavButton: NSButton {
     init(title: String, symbol: String) {
         caption = title
         super.init(frame: .zero)
-        image = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular))
+        // Symbols differ in width; centring each in a fixed slot keeps the labels on one left edge.
+        if let sym = NSImage(systemSymbolName: symbol, accessibilityDescription: title)?
+            .withSymbolConfiguration(.init(pointSize: 14, weight: .regular)) {
+            let slot = NSImage(size: NSSize(width: 20, height: 18), flipped: false) { r in
+                sym.draw(in: NSRect(x: (r.width - sym.size.width) / 2, y: (r.height - sym.size.height) / 2,
+                                    width: sym.size.width, height: sym.size.height)); return true
+            }
+            slot.isTemplate = true
+            image = slot
+        }
         imagePosition = .imageLeading
         alignment = .left
         isBordered = false
@@ -401,7 +414,7 @@ final class NavButton: NSButton {
     private func restyle() {
         contentTintColor = isSelected ? Theme.purple : .secondaryLabelColor
         attributedTitle = NSAttributedString(string: "  " + caption, attributes: [
-            .foregroundColor: NSColor.labelColor, .font: NSFont.systemFont(ofSize: 13, weight: isSelected ? .semibold : .medium)])
+            .foregroundColor: NSColor.labelColor, .font: uiFont(12.5, isSelected ? .semibold : .medium)])
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.backgroundColor = (isSelected ? Theme.pill : .clear).cgColor
         }
@@ -430,7 +443,7 @@ final class FilterPill: NSButton {
         let p = NSMutableParagraphStyle(); p.alignment = .center
         attributedTitle = NSAttributedString(string: caption, attributes: [
             .foregroundColor: isSelected ? NSColor.white : NSColor.secondaryLabelColor,
-            .font: NSFont.systemFont(ofSize: 12.5, weight: .medium), .paragraphStyle: p])
+            .font: uiFont(12, .medium), .paragraphStyle: p])
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.backgroundColor = (isSelected ? Theme.purple : Theme.pill).cgColor
         }
@@ -705,8 +718,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     /// Big two-tone headline (dark, then grey), as on typeless.com.
     private func pageHeader(_ title: String, _ sub: String, grey: String = "") -> NSStackView {
         let t = NSTextField(labelWithAttributedString: {
-            let a = NSMutableAttributedString(string: title, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: NSColor.labelColor, .kern: -0.9])
-            if !grey.isEmpty { a.append(NSAttributedString(string: grey, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: Theme.purple, .kern: -0.9])) }
+            let a = NSMutableAttributedString(string: title, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: NSColor.labelColor, .kern: -1.6])
+            if !grey.isEmpty { a.append(NSAttributedString(string: grey, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: Theme.purple, .kern: -1.6])) }
             return a
         }())
         t.alignment = .center
@@ -1195,8 +1208,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     func updateGreeting() {
         guard let t = greetingTitle else { return }
         let name = Profile.name
-        let a = NSMutableAttributedString(string: name.isEmpty ? "Welcome back" : "Welcome back, ", attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: NSColor.labelColor, .kern: -0.9])
-        if !name.isEmpty { a.append(NSAttributedString(string: name, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: Theme.purple, .kern: -0.9])) }
+        let a = NSMutableAttributedString(string: name.isEmpty ? "Welcome back" : "Welcome back, ", attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: NSColor.labelColor, .kern: -1.6])
+        if !name.isEmpty { a.append(NSAttributedString(string: name, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: Theme.purple, .kern: -1.6])) }
         t.attributedStringValue = a
     }
 
