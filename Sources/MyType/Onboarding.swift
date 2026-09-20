@@ -117,8 +117,9 @@ final class StepArt: NSView {
             rr(NSRect(x: key.minX, y: key.minY - 5 + press * 4, width: key.width, height: key.height), 14, fill: NSColor.secondaryLabelColor.withAlphaComponent(0.25))
             if held { rr(key.insetBy(dx: -6, dy: -6), 18, fill: Theme.purple.withAlphaComponent(0.16)) }
             rr(key, 14, fill: Theme.card, stroke: held ? Theme.purple : Theme.line, width: held ? 2 : 1)
-            symbol("globe", NSRect(x: key.minX + 12, y: key.maxY - 26, width: 14, height: 14), .secondaryLabelColor)
-            text("fn", CGPoint(x: key.midX, y: key.midY - 8), size: 24, weight: .bold, color: held ? Theme.purple : .labelColor)
+            // Current MacBook keyboards: globe top-right, small "fn" bottom-left.
+            symbol("globe", NSRect(x: key.maxX - 34, y: key.maxY - 34, width: 22, height: 22), held ? Theme.purple : .secondaryLabelColor)
+            text("fn", CGPoint(x: key.minX + 14, y: key.minY + 18), size: 20, weight: .medium, color: held ? Theme.purple : .labelColor, center: false)
             if held {
                 bars(around: CGPoint(x: key.minX - 84, y: c.y), count: 7, t: t, spread: 12, height: 34, alpha: press)
                 bars(around: CGPoint(x: key.maxX + 84, y: c.y), count: 7, t: t + 1, spread: 12, height: 34, alpha: press)
@@ -171,8 +172,10 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private var dots: [Surface] = []
     private var timer: Timer?
 
-    private let dgField = NSSecureTextField(), llmField = NSSecureTextField()
-    private let nameField = NSTextField()
+    private let dgField = SecureInputField(), llmField = SecureInputField()
+    private let nameField = InputField()
+    private lazy var dgBox = InputBox(dgField, width: 340)
+    private lazy var llmBox = InputBox(llmField, width: 340)
     private let nameRow = NSStackView()
     private let status = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
     private let tryView = NSTextView()
@@ -247,14 +250,9 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             dotRow.centerYAnchor.constraint(equalTo: nextButton.centerYAnchor),
         ])
 
-        for f in [dgField, llmField] {
-            f.delegate = self; f.bezelStyle = .roundedBezel; f.focusRingType = .none
-        }
-        nameField.delegate = self; nameField.bezelStyle = .roundedBezel; nameField.focusRingType = .none
-        nameField.alignment = .center
+        dgField.delegate = self; llmField.delegate = self; nameField.delegate = self
         nameField.placeholderString = "Your name or nickname"
-        nameField.widthAnchor.constraint(equalToConstant: 240).isActive = true
-        nameRow.setViews([nameField], in: .center)
+        nameRow.setViews([InputBox(nameField, width: 260, align: .center)], in: .center)
         dgField.placeholderString = "Paste your Deepgram key"
         llmField.placeholderString = "Paste your Groq key"
 
@@ -325,13 +323,13 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             titleLabel.stringValue = "Add your speech key"
             bodyLabel.stringValue = "MyType uses Deepgram to turn your voice into text. New accounts get $200 of free credit, which is up to 2 years of moderate to heavy use."
             views = [steps(["Sign up at console.deepgram.com", "Open API Keys and click Create a New API Key", "Copy the key and paste it below"]),
-                     btn("Open Deepgram") { [weak self] in self?.open("https://console.deepgram.com/signup") }, dgField, status]
+                     btn("Open Deepgram") { [weak self] in self?.open("https://console.deepgram.com/signup") }, dgBox, status]
         case 2:
             art.kind = .key
             titleLabel.stringValue = "Add your cleanup key (optional)"
             bodyLabel.stringValue = "Groq's free tier fixes punctuation, removes “um”s and honours self-corrections. Skip it and you still get accurate text, just less polished."
             views = [steps(["Sign up at console.groq.com", "Open API Keys and click Create API Key", "Copy the key and paste it below"]),
-                     btn("Open Groq") { [weak self] in self?.open("https://console.groq.com/keys") }, llmField, status]
+                     btn("Open Groq") { [weak self] in self?.open("https://console.groq.com/keys") }, llmBox, status]
         case 3:
             art.kind = .permissions
             titleLabel.stringValue = "Allow three permissions"
@@ -348,7 +346,7 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         default:
             art.kind = .tryIt
             titleLabel.stringValue = "Try it"
-            bodyLabel.stringValue = "Click the box, hold Fn, say something, and let go. Double-tap Fn for hands-free; tap once to stop."
+            bodyLabel.stringValue = "Click the box, hold Fn, say something, and let go. Double-tap Fn for hands-free; tap once to stop. Right Option works too: tap it once for hands-free."
             let box = Surface(fill: Theme.field, stroke: Theme.line, radius: 10)
             let sv = NSScrollView()
             sv.documentView = tryView; sv.drawsBackground = false; sv.hasVerticalScroller = true; sv.borderType = .noBorder

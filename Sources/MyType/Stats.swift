@@ -113,11 +113,13 @@ enum Stats {
 
     // MARK: money
 
-    /// Monthly price (in rand) of a paid dictation subscription you'd otherwise have. Editable.
-    static var planPriceZAR: Double {
-        get { UserDefaults.standard.object(forKey: "planPriceZAR") as? Double ?? 250 }
-        set { UserDefaults.standard.set(newValue, forKey: "planPriceZAR") }
+    /// Monthly price (in US dollars, as such plans are billed) of a paid dictation subscription you'd otherwise have. Editable.
+    /// Converted to rand at the daily exchange rate.
+    static var planPriceUSD: Double {
+        get { UserDefaults.standard.object(forKey: "planPriceUSD") as? Double ?? 15 }
+        set { UserDefaults.standard.set(newValue, forKey: "planPriceUSD") }
     }
+    static var planPriceZAR: Double { Currency.zar(planPriceUSD) }
 
     /// Whole months of use so far (a subscription bills per month started).
     static var monthsUsed: Int {

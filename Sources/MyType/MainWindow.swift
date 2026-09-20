@@ -103,6 +103,65 @@ final class GradientCard: NSView {
     required init?(coder: NSCoder) { fatalError() }
 }
 
+
+/// Text fields that tell their InputBox when they gain or lose focus.
+class InputField: NSTextField {
+    var onFocus: ((Bool) -> Void)?
+    override func becomeFirstResponder() -> Bool { let ok = super.becomeFirstResponder(); if ok { onFocus?(true) }; return ok }
+    override func textDidEndEditing(_ notification: Notification) { super.textDidEndEditing(notification); onFocus?(false) }
+}
+final class SecureInputField: NSSecureTextField {
+    var onFocus: ((Bool) -> Void)?
+    override func becomeFirstResponder() -> Bool { let ok = super.becomeFirstResponder(); if ok { onFocus?(true) }; return ok }
+    override func textDidEndEditing(_ notification: Notification) { super.textDidEndEditing(notification); onFocus?(false) }
+}
+
+/// Flat, rounded text input in a fixed monospaced face. The whole box is the click target: it lifts and shows a text cursor on
+/// hover, and takes a purple ring while you type.
+final class InputBox: NSView {
+    let field: NSTextField
+    private var hover = false { didSet { needsDisplay = true } }
+    private var focused = false { didSet { needsDisplay = true } }
+
+    init(_ f: NSTextField, width: CGFloat, align: NSTextAlignment = .left) {
+        field = f
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.cornerRadius = 10
+        translatesAutoresizingMaskIntoConstraints = false
+        f.isBordered = false; f.drawsBackground = false; f.focusRingType = .none
+        f.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        f.alignment = align
+        f.usesSingleLineMode = true
+        f.cell?.isScrollable = true; f.lineBreakMode = .byClipping
+        f.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(f)
+        NSLayoutConstraint.activate([
+            widthAnchor.constraint(equalToConstant: width), heightAnchor.constraint(equalToConstant: 34),
+            f.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12), f.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            f.centerYAnchor.constraint(equalTo: centerYAnchor),
+        ])
+        let focus: (Bool) -> Void = { [weak self] on in self?.focused = on }
+        (f as? InputField)?.onFocus = focus
+        (f as? SecureInputField)?.onFocus = focus
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self))
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var wantsUpdateLayer: Bool { true }
+    override func mouseEntered(with e: NSEvent) { hover = true }
+    override func mouseExited(with e: NSEvent) { hover = false }
+    override func mouseDown(with e: NSEvent) { window?.makeFirstResponder(field) }
+    override func resetCursorRects() { addCursorRect(bounds, cursor: .iBeam) }
+    override func viewDidChangeEffectiveAppearance() { needsDisplay = true }
+    override func updateLayer() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            layer?.backgroundColor = (hover || focused ? Theme.purple.withAlphaComponent(0.07).blended(withFraction: 0.5, of: Theme.field) ?? Theme.field : Theme.field).cgColor
+            layer?.borderColor = (focused ? Theme.purple : hover ? Theme.purple.withAlphaComponent(0.45) : Theme.line).cgColor
+            layer?.borderWidth = focused ? 1.5 : 1
+        }
+    }
+}
+
 final class FlippedClip: NSClipView { override var isFlipped: Bool { true } }
 
 /// Flat rounded button. Primary = purple fill.
@@ -308,8 +367,10 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let chart = BarChart()
     private let chartTotal = makeLabel("", size: 12, color: .secondaryLabelColor)
     private let moneyValue = makeLabel("$0", size: 34), moneyNote = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
-    private let planField = NSTextField()
-    private let nameField = NSTextField()
+    private let planField = InputField()
+    private let heroTitle = makeLabel("", size: 15, weight: .semibold), heroBody = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
+    private let fnPopup = NSPopUpButton(), optionPopup = NSPopUpButton()
+    private let nameField = InputField()
     private var greetingTitle: NSTextField?
     private let typeView = NSTextView(), typePassage = NSTextField(wrappingLabelWithString: "")
     private let typeLive = makeLabel("", size: 12, color: .secondaryLabelColor), typeBest = makeLabel("", size: 12, color: .secondaryLabelColor)
@@ -327,8 +388,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private var words: [String] = []
     private let snipView = NSTextView()
     private let aiSwitch = PurpleSwitch(), langSwitch = PurpleSwitch(), loginSwitch = PurpleSwitch(), chipSwitch = PurpleSwitch()
-    private let dgField = NSSecureTextField(), llmKeyField = NSSecureTextField()
-    private let llmURLField = NSTextField(), llmModelField = NSTextField()
+    private let dgField = SecureInputField(), llmKeyField = SecureInputField()
+    private let llmURLField = InputField(), llmModelField = InputField()
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let stylePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let appearancePopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -343,9 +404,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private var selectedPage = 0
     var onSetup: (() -> Void)?
     private var usageCells: [[NSTextField]] = []
-    private let dgRateField = NSTextField(), inRateField = NSTextField(), outRateField = NSTextField(), creditField = NSTextField()
+    private let dgRateField = InputField(), inRateField = InputField(), outRateField = InputField(), creditField = InputField()
     private let cleanupFreeSwitch = PurpleSwitch()
-    private let rateField = NSTextField()
+    private let rateField = InputField()
     /// The three cost tiles shown on both Home and Usage. Each page needs its own labels.
     private struct CostTiles {
         let would = makeLabel("–", size: 26, weight: .bold), pay = makeLabel("–", size: 26, weight: .bold), credit = makeLabel("–", size: 26, weight: .bold)
@@ -463,11 +524,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         return r
     }
 
-    private func field(_ f: NSTextField, placeholder: String, value: String, width: CGFloat = 270) -> NSTextField {
+    private func field(_ f: NSTextField, placeholder: String, value: String, width: CGFloat = 270) -> NSView {
         f.stringValue = value; f.placeholderString = placeholder; f.delegate = self
-        f.bezelStyle = .roundedBezel; f.focusRingType = .none
-        f.widthAnchor.constraint(equalToConstant: width).isActive = true
-        return f
+        return InputBox(f, width: width, align: width <= 100 ? .center : .left)
     }
 
     private func page(_ views: [NSView]) -> NSScrollView {
@@ -546,7 +605,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let status = NSStackView(views: [statusRow, engineLabel])
         status.orientation = .vertical; status.alignment = .leading; status.spacing = 3
         status.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 0)
-        let credit = centered(makeLabel("Created by Jay Sinha", size: 10, color: .tertiaryLabelColor, wrap: true))
+        let credit = NSStackView(views: [makeLabel("Created by Jay Sinha", size: 10, color: .tertiaryLabelColor)])
+        credit.alignment = .leading
+        credit.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 0)
         let footer = vstack([nav[4], divider(), status, credit], spacing: 10)
         footer.setCustomSpacing(14, after: status)
 
@@ -623,14 +684,12 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         centered(chartTotal)
         let chartCard = card([centered(makeLabel("Time saved", size: 15, weight: .semibold)), chartTotal, chart], spacing: 8)
 
-        planField.font = .systemFont(ofSize: 12)
-        planField.stringValue = String(format: "%g", Stats.planPriceZAR)
+        planField.stringValue = String(format: "%g", Stats.planPriceUSD)
         planField.delegate = self
-        planField.bezelStyle = .roundedBezel; planField.focusRingType = .none
-        planField.widthAnchor.constraint(equalToConstant: 60).isActive = true
+        let planBox = InputBox(planField, width: 72, align: .center)
         moneyValue.font = serifFont(34); moneyValue.textColor = Theme.purple
         let priceRow = NSStackView(); priceRow.spacing = 8; priceRow.alignment = .centerY
-        priceRow.setViews([makeLabel("Compared with a subscription at R/month", size: 12, color: .secondaryLabelColor), planField], in: .center)
+        priceRow.setViews([makeLabel("Compared with a subscription at US$ per month", size: 12, color: .secondaryLabelColor), planBox], in: .center)
         centered(moneyValue); centered(moneyNote)
         let moneyCard = card([centered(makeLabel("Money saved", size: 15, weight: .semibold)), moneyValue, moneyNote, priceRow], spacing: 8)
         let mid = NSStackView(views: [chartCard, moneyCard]); mid.spacing = 12; mid.alignment = .top; mid.distribution = .fill
@@ -638,14 +697,18 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         chartCard.heightAnchor.constraint(equalTo: moneyCard.heightAnchor).isActive = true
 
         // ---- how to dictate + try it
+        // Current MacBook Air key: globe top-right, small "fn" bottom-left.
         let keycap = Surface(fill: Theme.card, stroke: Theme.line, radius: 9)
-        let fn = makeLabel("fn", size: 15, weight: .semibold, color: Theme.purple)
-        keycap.addSubview(fn); fn.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([keycap.widthAnchor.constraint(equalToConstant: 48), keycap.heightAnchor.constraint(equalToConstant: 40),
-                                     fn.centerXAnchor.constraint(equalTo: keycap.centerXAnchor), fn.centerYAnchor.constraint(equalTo: keycap.centerYAnchor)])
-        let big = makeLabel("Hold fn to talk", size: 15, weight: .semibold)
-        let small = makeLabel("Release to paste at your cursor. Double-tap fn for hands-free, then tap once more to stop. Right Option works too: hold it to talk, or tap it once to open the mic hands-free and tap again to stop.",
-                              size: 12, color: .secondaryLabelColor, wrap: true)
+        let fn = makeLabel("fn", size: 12, weight: .medium)
+        let globe = NSImageView(image: NSImage(systemSymbolName: "globe", accessibilityDescription: "Globe")?
+            .withSymbolConfiguration(.init(pointSize: 13, weight: .regular)) ?? NSImage())
+        globe.contentTintColor = .secondaryLabelColor
+        for v in [fn, globe] { keycap.addSubview(v); v.translatesAutoresizingMaskIntoConstraints = false }
+        NSLayoutConstraint.activate([keycap.widthAnchor.constraint(equalToConstant: 56), keycap.heightAnchor.constraint(equalToConstant: 46),
+                                     fn.leadingAnchor.constraint(equalTo: keycap.leadingAnchor, constant: 8), fn.bottomAnchor.constraint(equalTo: keycap.bottomAnchor, constant: -6),
+                                     globe.trailingAnchor.constraint(equalTo: keycap.trailingAnchor, constant: -7), globe.topAnchor.constraint(equalTo: keycap.topAnchor, constant: 6)])
+        let big = heroTitle, small = heroBody
+        updateHero()
         centered(big); centered(small)
         let hero = Surface(fill: Theme.tint, radius: 16)
         let heroRow = NSStackView(views: [keycap, big, small]); heroRow.orientation = .vertical; heroRow.alignment = .centerX; heroRow.spacing = 8
@@ -760,16 +823,15 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     private func buildDictionary() -> NSView {
-        let addField = NSTextField()
+        let addField = InputField()
         addField.placeholderString = "Add a word or name"
-        addField.bezelStyle = .roundedBezel; addField.focusRingType = .none
         addField.target = self; addField.action = #selector(addWord(_:))
-        addField.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        let addBox = InputBox(addField, width: 260)
         newWordField = addField
         let add = PillButton(title: "New word")
         add.target = self; add.action = #selector(addWord(_:))
         let addRow = NSStackView(); addRow.spacing = 8; addRow.alignment = .centerY
-        addRow.setViews([addField, add], in: .center)
+        addRow.setViews([addBox, add], in: .center)
         wordFlow.gap = 8
         let c = card([sectionTitle("Your words", symbol: "textformat.abc"), addRow, wordFlow,
                       centered(makeLabel("Press Return to add a word. Paste several separated by commas.", size: 12, color: .secondaryLabelColor, wrap: true))], spacing: 14)
@@ -833,6 +895,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         grid.rowSpacing = 12; grid.columnSpacing = 22
         for r in rows { for case let l as NSTextField in r { l.alignment = .center } }
         grid.xPlacement = .center
+        for r in rows { (r[0] as? NSTextField)?.alignment = .left }
+        grid.column(at: 0).xPlacement = .leading
         let gridRow = NSStackView(); gridRow.setViews([grid], in: .center)
         let summary = costSummary(usageTiles)
         let table = card([sectionTitle("Running cost", symbol: "chart.bar"), gridRow, centered(creditLabel),
@@ -931,12 +995,22 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             settingRow("Copy chip when nothing is focused", "If no text box is focused when you start talking, or you switch apps mid-dictation, the text is kept on the clipboard and a small chip lets you copy it again. Nothing appears when it types into a text box.", chipSwitch),
             settingRow("Launch at login", nil, loginSwitch),
         ]), spacing: 16)
+        for (pop, mode) in [(fnPopup, Shortcuts.fn), (optionPopup, Shortcuts.option)] {
+            pop.addItems(withTitles: KeyMode.allCases.map(\.title))
+            pop.selectItem(at: mode.rawValue)
+            pop.target = self; pop.action = #selector(pickShortcut(_:))
+            pop.widthAnchor.constraint(equalToConstant: 270).isActive = true
+        }
+        let shortcuts = card([sectionTitle("Shortcuts", symbol: "keyboard")] + spaced([
+            settingRow("Fn (Globe) key", "Set “Press 🌐 key to” to Do Nothing in System Settings › Keyboard so macOS leaves it alone.", fnPopup),
+            settingRow("Right Option key", "A single tap avoids the double-tap that macOS and other apps often claim. Pressing Option with another key never dictates.", optionPopup),
+        ]) + [centered(makeLabel("Hands-free keeps listening until you tap the key once more.", size: 11, color: .secondaryLabelColor, wrap: true))], spacing: 16)
         let setupBtn = PillButton(title: "Open setup guide", primary: false)
         setupBtn.target = self; setupBtn.action = #selector(runSetup)
         let setupRow = NSStackView(); setupRow.setViews([setupBtn], in: .center)
         let perms = card([sectionTitle("Permissions", symbol: "lock.shield")] + spaced([micRow.view, axRow.view, inputRow.view, keyRow.view]) + [setupRow], spacing: 14)
         let ver = centered(makeLabel("MyType \(InstallCheck.version)  ·  Created by Jay Sinha, built with Claude Code", size: 12, color: .tertiaryLabelColor))
-        return page([pageHeader("Settings", "Speech, cleanup and permissions."), speech, general, perms, ver])
+        return page([pageHeader("Settings", "Speech, cleanup and permissions."), speech, general, shortcuts, perms, ver])
     }
 
     // MARK: actions
@@ -951,6 +1025,15 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
 
     @objc private func pickAppearance() {
         AppearanceMode.current = AppearanceMode.allCases[max(0, appearancePopup.indexOfSelectedItem)]
+    }
+    @objc private func pickShortcut(_ sender: NSPopUpButton) {
+        let m = KeyMode(rawValue: max(0, sender.indexOfSelectedItem)) ?? .holdTap
+        if sender === fnPopup { Shortcuts.fn = m } else { Shortcuts.option = m }
+        updateHero()
+    }
+    private func updateHero() {
+        let t = Shortcuts.homeText
+        heroTitle.stringValue = t.title; heroBody.stringValue = t.body
     }
     @objc private func pickStyle() {
         WritingStyle.current = WritingStyle.allCases[max(0, stylePopup.indexOfSelectedItem)]
@@ -1122,7 +1205,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         if let v = Double(rateField.stringValue.replacingOccurrences(of: ",", with: ".")), v > 1, abs(v - Currency.rate) > 0.0001 {
             Currency.rate = v; Currency.manual = true; reloadStats()
         }
-        if let v = Double(planField.stringValue), v >= 0 { Stats.planPriceZAR = v; reloadStats() }
+        if let v = Double(planField.stringValue.replacingOccurrences(of: ",", with: ".")), v >= 0 { Stats.planPriceUSD = v; reloadStats() }
         app.refreshAI()
         refresh()
         if selectedPage == 1 { reloadUsage() }

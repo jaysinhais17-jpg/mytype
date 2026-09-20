@@ -65,3 +65,47 @@ enum AppearanceMode: Int, CaseIterable {
         }
     }
 }
+
+/// What a modifier key does. Every mode except Off keeps hold-to-talk; they differ in how hands-free starts.
+enum KeyMode: Int, CaseIterable {
+    case holdTap, holdDoubleTap, holdOnly, off
+    var title: String {
+        ["Hold to talk, tap for hands-free", "Hold to talk, double-tap for hands-free", "Hold to talk only", "Off"][rawValue]
+    }
+}
+
+/// Dictation shortcuts. Defaults: Fn = hold, or double-tap for hands-free; Right Option = hold, or a single tap for hands-free
+/// (a double-tap of Option collides with other tools, so it is never required).
+enum Shortcuts {
+    private static func load(_ key: String, _ fallback: KeyMode) -> KeyMode {
+        (UserDefaults.standard.object(forKey: key) as? Int).flatMap(KeyMode.init(rawValue:)) ?? fallback
+    }
+    static var fn: KeyMode {
+        get { load("fnMode", .holdDoubleTap) }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "fnMode") }
+    }
+    static var option: KeyMode {
+        get { load("optionMode", .holdTap) }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "optionMode") }
+    }
+
+    private static func how(_ m: KeyMode) -> String {
+        switch m {
+        case .holdTap: return "hold to talk, or tap once for hands-free"
+        case .holdDoubleTap: return "hold to talk, or double-tap for hands-free"
+        case .holdOnly: return "hold to talk"
+        case .off: return ""
+        }
+    }
+    /// Home-page heading and body text for the current bindings.
+    static var homeText: (title: String, body: String) {
+        var parts: [String] = []
+        if fn != .off { parts.append("fn: \(how(fn))") }
+        if option != .off { parts.append("Right Option: \(how(option))") }
+        if parts.isEmpty { return ("Shortcuts are off", "Turn a key on in Settings to start dictating.") }
+        let title = fn != .off ? "Hold fn to talk" : "Hold Right Option to talk"
+        let hands = [fn, option].contains { $0 == .holdTap || $0 == .holdDoubleTap }
+        return (title, "Release to paste at your cursor. " + parts.joined(separator: ". ").prefix(1).uppercased() + parts.joined(separator: ". ").dropFirst()
+                + "." + (hands ? " Tap once more to stop hands-free." : ""))
+    }
+}

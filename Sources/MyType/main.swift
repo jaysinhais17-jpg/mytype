@@ -216,24 +216,34 @@ final class App: NSObject, NSApplicationDelegate {
 
     private static let rightOption: Int64 = 61
 
-    /// Hold Fn or Right Option = push-to-talk. Double-tap Fn = hands-free (tap once more to stop).
-    /// Right Option never needs a double-tap (macOS grabs it): a single tap opens the mic hands-free, another tap stops.
+    private func mode(_ code: Int64) -> KeyMode { code == Self.rightOption ? Shortcuts.option : Shortcuts.fn }
+
+    /// Each key follows its Shortcuts mode (Settings): hold = push-to-talk; hands-free opens with a single tap or a double-tap,
+    /// then one more tap stops it. Defaults: Fn double-tap, Right Option single tap (macOS grabs a double-tap of Option).
     private func keyDown(_ code: Int64) {
         if recording && locked { locked = false; finish(); return }
         guard !recording else { return }
+        let m = mode(code)
+        if m == .off { return }
         pressStart = Date()
-        if code == Self.rightOption { begin(showAfter: Config.tapSeconds); return }
-        let isDouble = Date().timeIntervalSince(lastTapUp) < Config.doubleTapSeconds
-        begin(showAfter: isDouble ? 0 : Config.tapSeconds)
-        if isDouble && recording { locked = true }
+        if m == .holdDoubleTap {
+            let isDouble = Date().timeIntervalSince(lastTapUp) < Config.doubleTapSeconds
+            begin(showAfter: isDouble ? 0 : Config.tapSeconds)
+            if isDouble && recording { locked = true }
+        } else { begin(showAfter: Config.tapSeconds) }
     }
 
     private func keyUp(_ code: Int64, chorded: Bool) {
         guard recording, !locked else { return }
+        let m = mode(code)
+        if m == .off { return }
         if code == Self.rightOption && chorded { cancelRecording(); return }   // Option+key shortcut, not dictation
         if Date().timeIntervalSince(pressStart) < Config.tapSeconds {
-            if code == Self.rightOption { lockHandsFree() }
-            else { cancelRecording(); lastTapUp = Date() }
+            switch m {
+            case .holdTap: lockHandsFree()
+            case .holdDoubleTap: cancelRecording(); lastTapUp = Date()
+            default: cancelRecording()
+            }
         } else { finish() }
     }
 
