@@ -57,6 +57,9 @@ func makeLabel(_ s: String, size: CGFloat, weight: NSFont.Weight = .regular, col
     return t
 }
 
+/// Centre a label's text (labels inside a `vstack` are as wide as the stack, so this centres them).
+@discardableResult func centered(_ t: NSTextField) -> NSTextField { t.alignment = .center; return t }
+
 /// Headlines and big numbers: medium-weight system display face, like Typeless's geometric headlines.
 func serifFont(_ size: CGFloat, weight: NSFont.Weight = .medium) -> NSFont {
     NSFont.systemFont(ofSize: size, weight: weight)
@@ -105,7 +108,12 @@ final class FlippedClip: NSClipView { override var isFlipped: Bool { true } }
 /// Flat rounded button. Primary = purple fill.
 class PillButton: NSButton {
     private let primary: Bool
-    private let caption: String
+    private var caption: String
+    /// Retitling must keep the styled (contrast-correct) title, not fall back to the plain label colour.
+    override var title: String {
+        get { caption }
+        set { caption = newValue; restyle() }
+    }
     init(title: String, primary: Bool = true) {
         self.primary = primary; self.caption = title
         super.init(frame: .zero)
@@ -237,12 +245,21 @@ final class FlowView: NSView {
     override func layout() {
         super.layout()
         var x: CGFloat = 0, y: CGFloat = 0, rowH: CGFloat = 0
+        var row: [NSView] = []
+        func flush() {
+            let used = row.last?.frame.maxX ?? 0
+            let shift = max(0, (bounds.width - used) / 2).rounded()
+            for v in row { v.frame.origin.x += shift }
+            row = []
+        }
         for v in subviews {
             let sz = v.fittingSize
-            if x > 0 && x + sz.width > bounds.width { x = 0; y += rowH + gap; rowH = 0 }
+            if x > 0 && x + sz.width > bounds.width { flush(); x = 0; y += rowH + gap; rowH = 0 }
             v.frame = NSRect(x: x, y: y, width: sz.width, height: sz.height)
+            row.append(v)
             x += sz.width + gap; rowH = max(rowH, sz.height)
         }
+        flush()
         let h = max(y + rowH, 10)
         if abs(heightC.constant - h) > 0.5 { heightC.constant = h }
     }
@@ -421,9 +438,11 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
 
     private func sectionTitle(_ s: String, symbol: String? = nil) -> NSView {
         let t = makeLabel(s, size: 14, weight: .semibold)
+        t.alignment = .center
         guard let symbol, let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)?.withSymbolConfiguration(.init(pointSize: 13, weight: .medium)) else { return t }
         let iv = NSImageView(image: img); iv.contentTintColor = Theme.purple
-        let r = NSStackView(views: [iv, t]); r.spacing = 7; r.alignment = .centerY
+        let r = NSStackView(); r.spacing = 7; r.alignment = .centerY
+        r.setViews([iv, t], in: .center)
         return r
     }
 
@@ -436,6 +455,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         control.setContentHuggingPriority(.required, for: .horizontal)
         let r = NSStackView(views: [left, control])
         r.orientation = .horizontal; r.alignment = .centerY; r.spacing = 16
+        r.distribution = .fill
+        left.setContentHuggingPriority(.init(1), for: .horizontal)
         return r
     }
 
@@ -450,7 +471,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let st = vstack(views, spacing: 16)
         let doc = NSView()
         doc.translatesAutoresizingMaskIntoConstraints = false
-        pin(st, in: doc, top: 50, leading: 40, trailing: 40, bottom: 40)
+        pin(st, in: doc, top: 22, leading: 40, trailing: 40, bottom: 40)
         let sv = NSScrollView()
         sv.contentView = FlippedClip()
         sv.documentView = doc
@@ -469,13 +490,21 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     /// Big two-tone headline (dark, then grey), as on typeless.com.
     private func pageHeader(_ title: String, _ sub: String, grey: String = "") -> NSStackView {
         let t = NSTextField(labelWithAttributedString: {
-            let a = NSMutableAttributedString(string: title, attributes: [.font: serifFont(32), .foregroundColor: NSColor.labelColor, .kern: -0.6])
-            if !grey.isEmpty { a.append(NSAttributedString(string: grey, attributes: [.font: serifFont(32), .foregroundColor: NSColor.tertiaryLabelColor, .kern: -0.6])) }
+            let a = NSMutableAttributedString(string: title, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: NSColor.labelColor, .kern: -0.9])
+            if !grey.isEmpty { a.append(NSAttributedString(string: grey, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: Theme.purple, .kern: -0.9])) }
             return a
         }())
-        let h = NSStackView(views: [t, makeLabel(sub, size: 13, color: .secondaryLabelColor, wrap: true)])
-        h.orientation = .vertical; h.alignment = .leading; h.spacing = 6
-        h.setCustomSpacing(8, after: t)
+        t.alignment = .center
+        let accent = Surface(fill: Theme.purple, radius: 2)
+        accent.heightAnchor.constraint(equalToConstant: 4).isActive = true
+        let subtitle = makeLabel(sub, size: 14, color: .secondaryLabelColor, wrap: true)
+        subtitle.alignment = .center
+        let h = NSStackView(views: [t, accent, subtitle])
+        h.orientation = .vertical; h.alignment = .centerX; h.spacing = 12
+        h.setCustomSpacing(10, after: t)
+        h.edgeInsets = NSEdgeInsets(top: 0, left: 0, bottom: 10, right: 0)
+        subtitle.widthAnchor.constraint(equalTo: h.widthAnchor).isActive = true
+        accent.widthAnchor.constraint(equalTo: t.widthAnchor).isActive = true
         return h
     }
 
@@ -495,13 +524,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         NSLayoutConstraint.activate([edge.trailingAnchor.constraint(equalTo: side.trailingAnchor), edge.topAnchor.constraint(equalTo: side.topAnchor),
                                      edge.bottomAnchor.constraint(equalTo: side.bottomAnchor), edge.widthAnchor.constraint(equalToConstant: 1)])
 
-        let logo = Surface(fill: Theme.purple, radius: 9)
-        let glyph = NSImageView(image: NSImage(systemSymbolName: "waveform", accessibilityDescription: nil)!
-            .withSymbolConfiguration(.init(pointSize: 14, weight: .bold))!)
-        glyph.contentTintColor = .white
-        logo.addSubview(glyph); glyph.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([logo.widthAnchor.constraint(equalToConstant: 30), logo.heightAnchor.constraint(equalToConstant: 30),
-                                     glyph.centerXAnchor.constraint(equalTo: logo.centerXAnchor), glyph.centerYAnchor.constraint(equalTo: logo.centerYAnchor)])
+        let logo = NSImageView(image: NSApp.applicationIconImage)
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        NSLayoutConstraint.activate([logo.widthAnchor.constraint(equalToConstant: 34), logo.heightAnchor.constraint(equalToConstant: 34)])
         let brand = NSStackView(views: [logo, makeLabel("MyType", size: 16, weight: .semibold)])
         brand.spacing = 9; brand.alignment = .centerY
         brand.edgeInsets = NSEdgeInsets(top: 0, left: 8, bottom: 0, right: 0)
@@ -518,7 +543,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let status = NSStackView(views: [statusRow, engineLabel])
         status.orientation = .vertical; status.alignment = .leading; status.spacing = 3
         status.edgeInsets = NSEdgeInsets(top: 0, left: 10, bottom: 0, right: 0)
-        let footer = vstack([nav[4], divider(), status], spacing: 10)
+        let credit = centered(makeLabel("Created by Jay Sinha", size: 10, color: .tertiaryLabelColor, wrap: true))
+        let footer = vstack([nav[4], divider(), status, credit], spacing: 10)
+        footer.setCustomSpacing(14, after: status)
 
         let top = vstack([brand, menu], spacing: 24)
         top.translatesAutoresizingMaskIntoConstraints = false; footer.translatesAutoresizingMaskIntoConstraints = false
@@ -572,14 +599,14 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         again.target = self; again.action = #selector(newPassage)
         let typeTitle = makeLabel("Typing speed", size: 15, weight: .semibold)
         typeBest.setContentHuggingPriority(.init(200), for: .horizontal)
-        let typeHead = NSStackView(views: [typeTitle, typeBest, again]); typeHead.spacing = 12; typeHead.alignment = .centerY
-        typeHead.setCustomSpacing(12, after: typeBest)
-        let typeCard = card([typeHead, typePassage, typeBox, typeLive], spacing: 12)
+        centered(typeTitle); centered(typeBest); centered(typePassage); centered(typeLive)
+        let againRow = NSStackView(); againRow.setViews([again], in: .center)
+        let typeCard = card([typeTitle, typeBest, typePassage, typeBox, typeLive, againRow], spacing: 12)
         loadPassage()
 
         // ---- stats
         func stat(_ value: NSTextField, _ caption: NSTextField) -> Surface {
-            value.font = serifFont(28)
+            value.font = serifFont(28); centered(value); centered(caption)
             let c = Surface(fill: Theme.card, stroke: Theme.line, radius: 16)
             pin(vstack([value, caption], spacing: 2), in: c, top: 16, leading: 20, trailing: 20, bottom: 16)
             return c
@@ -590,11 +617,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         stats.distribution = .fillEqually; stats.spacing = 12
 
         // ---- time saved chart + money saved
-        let chartHead = NSStackView(views: [makeLabel("Time saved", size: 15, weight: .semibold), chartTotal])
-        chartHead.distribution = .fill; chartHead.alignment = .firstBaseline
-        chartTotal.alignment = .right
-        chartTotal.setContentHuggingPriority(.init(200), for: .horizontal)
-        let chartCard = card([chartHead, chart], spacing: 12)
+        centered(chartTotal)
+        let chartCard = card([centered(makeLabel("Time saved", size: 15, weight: .semibold)), chartTotal, chart], spacing: 8)
 
         planField.font = .systemFont(ofSize: 12)
         planField.stringValue = String(format: "%g", Stats.planPriceZAR)
@@ -602,9 +626,10 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         planField.bezelStyle = .roundedBezel; planField.focusRingType = .none
         planField.widthAnchor.constraint(equalToConstant: 60).isActive = true
         moneyValue.font = serifFont(34); moneyValue.textColor = Theme.purple
-        let priceRow = NSStackView(views: [makeLabel("Compared with a subscription at R/month", size: 12, color: .secondaryLabelColor), planField])
-        priceRow.spacing = 8; priceRow.alignment = .centerY
-        let moneyCard = card([makeLabel("Money saved", size: 15, weight: .semibold), moneyValue, moneyNote, priceRow], spacing: 8)
+        let priceRow = NSStackView(); priceRow.spacing = 8; priceRow.alignment = .centerY
+        priceRow.setViews([makeLabel("Compared with a subscription at R/month", size: 12, color: .secondaryLabelColor), planField], in: .center)
+        centered(moneyValue); centered(moneyNote)
+        let moneyCard = card([centered(makeLabel("Money saved", size: 15, weight: .semibold)), moneyValue, moneyNote, priceRow], spacing: 8)
         let mid = NSStackView(views: [chartCard, moneyCard]); mid.spacing = 12; mid.alignment = .top
         chartCard.widthAnchor.constraint(equalTo: moneyCard.widthAnchor, multiplier: 1.6).isActive = true
         chartCard.heightAnchor.constraint(equalTo: moneyCard.heightAnchor).isActive = true
@@ -618,17 +643,20 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let big = makeLabel("Hold fn to talk", size: 15, weight: .semibold)
         let small = makeLabel("Release to paste at your cursor. Double-tap fn for hands-free, then tap once more to stop. Right Option works too: hold it to talk, or tap it once to open the mic hands-free and tap again to stop.",
                               size: 12, color: .secondaryLabelColor, wrap: true)
-        let text = NSStackView(views: [big, small]); text.orientation = .vertical; text.alignment = .leading; text.spacing = 3
+        centered(big); centered(small)
         let hero = Surface(fill: Theme.tint, radius: 16)
-        let heroRow = NSStackView(views: [keycap, text]); heroRow.spacing = 16; heroRow.alignment = .centerY
-        pin(heroRow, in: hero, top: 16, leading: 18, trailing: 18, bottom: 16)
+        let heroRow = NSStackView(views: [keycap, big, small]); heroRow.orientation = .vertical; heroRow.alignment = .centerX; heroRow.spacing = 8
+        heroRow.setCustomSpacing(12, after: keycap)
+        small.widthAnchor.constraint(equalTo: heroRow.widthAnchor).isActive = true
+        pin(heroRow, in: hero, top: 18, leading: 24, trailing: 24, bottom: 18)
 
         let goSettings = PillButton(title: "Open Settings", primary: false)
         goSettings.target = self; goSettings.action = #selector(openSettings)
         let warn = makeLabel("Finish setup: MyType is missing a permission.", size: 13, weight: .medium)
-        let bannerRow = NSStackView(views: [warn, goSettings]); bannerRow.spacing = 12; bannerRow.alignment = .centerY
+        let bannerRow = NSStackView(); bannerRow.spacing = 12; bannerRow.alignment = .centerY
+        bannerRow.setViews([warn, goSettings], in: .center)
         setupBanner = Surface(fill: NSColor.systemOrange.withAlphaComponent(0.13), stroke: NSColor.systemOrange.withAlphaComponent(0.4), radius: 12)
-        pin(bannerRow, in: setupBanner, top: 10, leading: 16, trailing: 12, bottom: 10)
+        pin(bannerRow, in: setupBanner, top: 10, leading: 16, trailing: 16, bottom: 10)
 
         tryView.isEditable = true
         tryView.font = .systemFont(ofSize: 13)
@@ -652,10 +680,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         talk.onUp = { [weak self] in self?.app.finishManual() }
         let copy = PillButton(title: "Copy last", primary: false)
         copy.target = self; copy.action = #selector(copyLast)
-        let buttons = NSStackView(views: [talk, copy]); buttons.spacing = 8
-        let tryRow = NSStackView(views: [makeLabel("Try it here without leaving MyType.", size: 12, color: .secondaryLabelColor), buttons])
-        tryRow.alignment = .centerY
-        let tryCard = card([tryBox, tryRow], spacing: 10)
+        let buttons = NSStackView(); buttons.spacing = 8
+        buttons.setViews([talk, copy], in: .center)
+        let tryCard = card([centered(makeLabel("Try it here without leaving MyType.", size: 12, color: .secondaryLabelColor)), tryBox, buttons], spacing: 10)
 
         let first = NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
         return page([pageHeader(first.isEmpty ? "Welcome back" : "Welcome back, ", "Speak anywhere. Your words appear at the cursor.", grey: first), setupBanner, costSummary(homeTiles), stats, mid, typeCard, hero, tryCard])
@@ -668,7 +695,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             b.target = self; b.action = #selector(pickFilter(_:))
             return b
         }
-        let tabs = NSStackView(views: filterPills); tabs.spacing = 8
+        let tabs = NSStackView(); tabs.spacing = 8
+        tabs.setViews(filterPills, in: .center)
         return page([pageHeader("History", "Your recent dictations. Copy the text, or the original transcript before cleanup."), tabs, vstack([historyStack], spacing: 0)])
     }
 
@@ -735,10 +763,11 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         newWordField = addField
         let add = PillButton(title: "New word")
         add.target = self; add.action = #selector(addWord(_:))
-        let addRow = NSStackView(views: [addField, add]); addRow.spacing = 8; addRow.alignment = .centerY
+        let addRow = NSStackView(); addRow.spacing = 8; addRow.alignment = .centerY
+        addRow.setViews([addField, add], in: .center)
         wordFlow.gap = 8
         let c = card([sectionTitle("Your words", symbol: "textformat.abc"), addRow, wordFlow,
-                      makeLabel("Press Return to add a word. Paste several separated by commas.", size: 12, color: .secondaryLabelColor, wrap: true)], spacing: 14)
+                      centered(makeLabel("Press Return to add a word. Paste several separated by commas.", size: 12, color: .secondaryLabelColor, wrap: true))], spacing: 14)
         reloadWords()
 
         snipView.string = Config.snippets
@@ -760,19 +789,19 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         ssv.heightAnchor.constraint(equalToConstant: 120).isActive = true
         let sbox = Surface(fill: Theme.field, stroke: Theme.line, radius: 10)
         pin(ssv, in: sbox, top: 2, leading: 2, trailing: 2, bottom: 2)
-        let snipHint = makeLabel("One per line, like:  my email = jay@example.com. Say the words on the left and the text on the right is typed instead.", size: 12, color: .secondaryLabelColor, wrap: true)
+        let snipHint = centered(makeLabel("One per line, like:  my email = jay@example.com. Say the words on the left and the text on the right is typed instead.", size: 12, color: .secondaryLabelColor, wrap: true))
         let sc = card([sectionTitle("Snippets", symbol: "text.badge.plus"), sbox, snipHint], spacing: 12)
         return page([pageHeader("Dictionary", "Names, drugs and jargon MyType should always spell right."), c, sc])
     }
 
     private static let usagePeriods = ["Today", "This month", "All time"]
-    private static let usageColumns = ["", "Dictations", "Audio", "Speech", "Cleanup tokens", "Cleanup", "List price", "You pay"]
+    private static let usageColumns = ["Time period", "Dictations", "Audio", "Speech", "Cleanup tokens", "Cleanup", "List price", "You pay"]
 
     /// "This month" cost summary: list price, what you actually pay, and Deepgram credit left.
     private func costSummary(_ t: CostTiles) -> Surface {
         func tile(_ title: String, _ value: NSTextField, _ note: NSTextField, accent: Bool = false) -> Surface {
             let c = Surface(fill: accent ? Theme.purple.withAlphaComponent(0.12) : Theme.field, stroke: accent ? Theme.purple.withAlphaComponent(0.5) : Theme.line, radius: 12)
-            pin(vstack([makeLabel(title, size: 12, weight: .medium, color: .secondaryLabelColor), value, note], spacing: 4), in: c, top: 14, leading: 16, trailing: 16, bottom: 14)
+            pin(vstack([centered(makeLabel(title, size: 12, weight: .medium, color: .secondaryLabelColor)), centered(value), centered(note)], spacing: 4), in: c, top: 14, leading: 16, trailing: 16, bottom: 14)
             return c
         }
         let cells = [tile("Would cost at list price", t.would, t.wouldNote),
@@ -783,8 +812,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         for c in cells.dropFirst() { c.heightAnchor.constraint(equalTo: cells[0].heightAnchor).isActive = true }
         let refresh = PillButton(title: "Refresh balance", primary: false)
         refresh.target = self; refresh.action = #selector(refreshBalance)
-        let spacer = NSView(); spacer.setContentHuggingPriority(.init(1), for: .horizontal)
-        let refreshRow = NSStackView(views: [refresh, spacer]); refreshRow.spacing = 0
+        let refreshRow = NSStackView(); refreshRow.setViews([refresh], in: .center)
         return card([sectionTitle("This month", symbol: "calendar"), tiles, refreshRow], spacing: 14)
     }
 
@@ -798,10 +826,13 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         }
         let grid = NSGridView(views: rows)
         grid.rowSpacing = 12; grid.columnSpacing = 22
+        for r in rows { for case let l as NSTextField in r { l.alignment = .center } }
+        grid.xPlacement = .center
+        let gridRow = NSStackView(); gridRow.setViews([grid], in: .center)
         let summary = costSummary(usageTiles)
-        let table = card([sectionTitle("Running cost", symbol: "chart.bar"), grid, creditLabel,
-                          makeLabel("List price is what these dictations would cost at normal rates. You pay is what actually leaves your pocket: speech is covered by your Deepgram credit until it runs out, and cleanup is covered by the free tier while that switch is on. Estimates from the rates below, not an invoice.",
-                                    size: 11, color: .secondaryLabelColor, wrap: true)])
+        let table = card([sectionTitle("Running cost", symbol: "chart.bar"), gridRow, centered(creditLabel),
+                          centered(makeLabel("List price is what these dictations would cost at normal rates. You pay is what actually leaves your pocket: speech is covered by your Deepgram credit until it runs out, and cleanup is covered by the free tier while that switch is on. Estimates from the rates below, not an invoice.",
+                                    size: 11, color: .secondaryLabelColor, wrap: true))])
         cleanupFreeSwitch.isOn = Usage.cleanupFree
         cleanupFreeSwitch.target = self; cleanupFreeSwitch.action = #selector(toggleCleanupFree)
         rateField.delegate = self
@@ -875,8 +906,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             settingRow("Cleanup key", "Used to fix punctuation and edits.", field(llmKeyField, placeholder: "Paste API key", value: Cloud.llmKey)),
             settingRow("Base URL", nil, field(llmURLField, placeholder: "https://…", value: Cloud.llmBaseURL)),
             settingRow("Model", nil, field(llmModelField, placeholder: "model name", value: Cloud.llmModel)),
-            ]) + [makeLabel("With keys set, audio and text leave your Mac. Leave blank to stay fully on-device. Keys are stored on this Mac only.",
-                      size: 11, color: .secondaryLabelColor, wrap: true)],
+            ]) + [centered(makeLabel("With keys set, audio and text leave your Mac. Leave blank to stay fully on-device. Keys are stored on this Mac only.",
+                      size: 11, color: .secondaryLabelColor, wrap: true))],
         spacing: 16)
         stylePopup.addItems(withTitles: WritingStyle.allCases.map(\.title))
         stylePopup.selectItem(at: WritingStyle.allCases.firstIndex(of: WritingStyle.current) ?? 0)
@@ -891,8 +922,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         ]), spacing: 16)
         let setupBtn = PillButton(title: "Open setup guide", primary: false)
         setupBtn.target = self; setupBtn.action = #selector(runSetup)
-        let perms = card([sectionTitle("Permissions", symbol: "lock.shield")] + spaced([micRow.view, axRow.view, inputRow.view, keyRow.view]) + [setupBtn], spacing: 14)
-        let ver = makeLabel("MyType \(InstallCheck.version)", size: 12, color: .tertiaryLabelColor)
+        let setupRow = NSStackView(); setupRow.setViews([setupBtn], in: .center)
+        let perms = card([sectionTitle("Permissions", symbol: "lock.shield")] + spaced([micRow.view, axRow.view, inputRow.view, keyRow.view]) + [setupRow], spacing: 14)
+        let ver = centered(makeLabel("MyType \(InstallCheck.version)  ·  Created by Jay Sinha, built with Claude Code", size: 12, color: .tertiaryLabelColor))
         return page([pageHeader("Settings", "Speech, cleanup and permissions."), speech, general, perms, ver])
     }
 
@@ -936,7 +968,9 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             : historyFilter == 2 ? Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date())) : nil
         shown = Array(History.items.filter { cutoff == nil || $0.date >= cutoff! }.prefix(30))
         if shown.isEmpty {
-            historyStack.addArrangedSubview(makeLabel(historyFilter == 0 ? "Your dictations will show up here." : "Nothing in this period yet.", size: 13, color: .secondaryLabelColor))
+            let empty = centered(makeLabel(historyFilter == 0 ? "Your dictations will show up here." : "Nothing in this period yet.", size: 13, color: .secondaryLabelColor))
+            historyStack.addArrangedSubview(empty)
+            empty.widthAnchor.constraint(equalTo: historyStack.widthAnchor).isActive = true
             return
         }
         let cal = Calendar.current
@@ -948,7 +982,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             var j = i
             while j < shown.count, cal.startOfDay(for: shown[j].date) == day { j += 1 }
             let name = cal.isDateInToday(day) ? "Today" : cal.isDateInYesterday(day) ? "Yesterday" : dayFmt.string(from: day)
-            let head = makeLabel(name, size: 12, weight: .medium, color: .secondaryLabelColor)
+            let head = centered(makeLabel(name, size: 12, weight: .medium, color: .secondaryLabelColor))
             var rows: [NSView] = []
             for k in i..<j {
                 if k > i { rows.append(divider()) }
@@ -957,6 +991,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
             let group = Surface(fill: Theme.card, stroke: Theme.line, radius: 16)
             pin(vstack(rows, spacing: 0), in: group, top: 2, leading: 0, trailing: 0, bottom: 2)
             historyStack.addArrangedSubview(head)
+            head.widthAnchor.constraint(equalTo: historyStack.widthAnchor).isActive = true
             historyStack.setCustomSpacing(6, after: head)
             historyStack.addArrangedSubview(group)
             historyStack.setCustomSpacing(20, after: group)
@@ -1017,6 +1052,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         statTypeCap.stringValue = Stats.typingWPM == nil ? "Typing WPM (take the test)" : "Typing WPM"
         statSaved.stringValue = Stats.duration(Stats.totalSavedSeconds)
         typeBest.stringValue = Stats.typingBest.map { "Best: \(Int($0.rounded())) WPM" } ?? ""
+        typeBest.isHidden = typeBest.stringValue.isEmpty
 
         let daily = Stats.dailySaved(14)
         let f = DateFormatter(); f.dateFormat = "d MMM"

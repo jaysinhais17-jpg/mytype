@@ -74,6 +74,12 @@ final class App: NSObject, NSApplicationDelegate {
         window = MainWindow(app: self)
         onboarding = Onboarding(app: self, main: window)
         window.onSetup = { [weak self] in self?.onboarding.show() }
+        // Test hook: MYTYPE_APPEARANCE=light|dark previews the UI without touching the system setting.
+        switch ProcessInfo.processInfo.environment["MYTYPE_APPEARANCE"] {
+        case "light": NSApp.appearance = NSAppearance(named: .aqua)
+        case "dark": NSApp.appearance = NSAppearance(named: .darkAqua)
+        default: break
+        }
         if let forced = ProcessInfo.processInfo.environment["MYTYPE_SETUP"] { onboarding.show(step: Int(forced) ?? 0) }
         else if !UserDefaults.standard.bool(forKey: "onboarded") && !Cloud.useDeepgram { onboarding.show() } else { window.show() }
 
@@ -124,7 +130,7 @@ final class App: NSObject, NSApplicationDelegate {
 
     /// Dock icon click / re-opening from Spotlight.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        window.show()
+        window?.show()
         return false
     }
 
@@ -175,7 +181,7 @@ final class App: NSObject, NSApplicationDelegate {
         NSApp.mainMenu = main
     }
 
-    @objc private func openWindow() { window.show() }
+    @objc private func openWindow() { window?.show() }
     @objc private func copyLastDictation() { if let t = Recall.lastText { Recall.copy(t) } }
     @objc private func copyRecent(_ item: NSMenuItem) { if let t = item.representedObject as? String { Recall.copy(t) } }
 

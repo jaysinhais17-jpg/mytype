@@ -25,6 +25,7 @@ cat > "$APP/Contents/Info.plist" <<PL
 <key>CFBundlePackageType</key><string>APPL</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>${VERSION:-1.0}</string>
+<key>NSHumanReadableCopyright</key><string>Copyright © 2026 Jay Sinha. MIT License.</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
 <key>CFBundleDisplayName</key><string>MyType</string>
 <key>NSPrincipalClass</key><string>NSApplication</string>

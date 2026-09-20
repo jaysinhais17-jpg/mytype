@@ -207,9 +207,12 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         window.contentView = root
 
         art.translatesAutoresizingMaskIntoConstraints = false
-        extra.orientation = .vertical; extra.alignment = .leading; extra.spacing = 12
+        extra.orientation = .vertical; extra.alignment = .centerX; extra.spacing = 12
+        titleLabel.alignment = .center
+        bodyLabel.alignment = .center
         let column = NSStackView(views: [art, titleLabel, bodyLabel, extra])
         column.orientation = .vertical; column.alignment = .leading; column.spacing = 14
+        titleLabel.widthAnchor.constraint(equalTo: column.widthAnchor).isActive = true
         column.setCustomSpacing(20, after: art)
         root.addSubview(column)
         column.translatesAutoresizingMaskIntoConstraints = false
@@ -287,8 +290,11 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
     private func open(_ url: String) { NSWorkspace.shared.open(URL(string: url)!) }
 
-    private func steps(_ lines: [String]) -> NSTextField {
-        makeLabel(lines.enumerated().map { "\($0.offset + 1)   \($0.element)" }.joined(separator: "\n"), size: 13, wrap: true)
+    /// Numbered lines: the block is centred, the text inside stays left-aligned so the numbers line up.
+    private func steps(_ lines: [String]) -> NSView {
+        let l = makeLabel(lines.enumerated().map { "\($0.offset + 1)   \($0.element)" }.joined(separator: "\n"), size: 13, wrap: true)
+        let row = NSStackView(views: [l]); row.orientation = .vertical; row.alignment = .centerX
+        return row
     }
 
     private func go(_ n: Int) {
@@ -308,7 +314,7 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         case 1:
             art.kind = .key
             titleLabel.stringValue = "Add your speech key"
-            bodyLabel.stringValue = "MyType uses Deepgram to turn your voice into text. New accounts get $200 of free credit, which is many months of normal use."
+            bodyLabel.stringValue = "MyType uses Deepgram to turn your voice into text. New accounts get $200 of free credit, which is up to 2 years of moderate to heavy use."
             views = [steps(["Sign up at console.deepgram.com", "Open API Keys and click Create a New API Key", "Copy the key and paste it below"]),
                      btn("Open Deepgram") { [weak self] in self?.open("https://console.deepgram.com/signup") }, dgField, status]
         case 2:
@@ -346,6 +352,7 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             ])
             views = [box, makeLabel("You can reopen this guide any time from Settings.", size: 11, color: .secondaryLabelColor)]
         }
+        for case let l as NSTextField in views where !l.isEditable { l.alignment = .center }
         for v in views { extra.addArrangedSubview(v); if !(v is LinkButton) { v.widthAnchor.constraint(equalTo: extra.widthAnchor).isActive = true } }
         backButton.isHidden = step == 0
         for (i, d) in dots.enumerated() { d.fill = i == step ? Theme.purple : Theme.line }

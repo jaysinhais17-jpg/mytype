@@ -104,11 +104,21 @@ final class Polisher {
         return out
     }
 
+    /// Lists always come out with "•" bullets, never "-" or "*" dashes.
+    static func bulletized(_ s: String) -> String {
+        s.split(separator: "\n", omittingEmptySubsequences: false).map { line -> String in
+            let t = line.drop(while: { $0 == " " })
+            if t.hasPrefix("- ") || t.hasPrefix("* ") || t.hasPrefix("– ") || t.hasPrefix("— ") { return "• " + t.dropFirst(2) }
+            return String(line)
+        }.joined(separator: "\n")
+    }
+
     /// Strips wrapper tags/quotes and rejects outputs whose length is implausible for a cleanup.
     static func accept(_ raw: String, for text: String, ratio range: ClosedRange<Double> = 0.4...1.6) -> String {
         var out = raw.replacingOccurrences(of: "</t>", with: "").replacingOccurrences(of: "<t>", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         if out.count >= 2, out.first == "\"", out.last == "\"" { out = String(out.dropFirst().dropLast()) }
+        out = bulletized(out)
         let ratio = Double(out.count) / Double(max(1, text.count))
         return out.isEmpty || !range.contains(ratio) ? text : out
     }
