@@ -172,6 +172,8 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     private var timer: Timer?
 
     private let dgField = NSSecureTextField(), llmField = NSSecureTextField()
+    private let nameField = NSTextField()
+    private let nameRow = NSStackView()
     private let status = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
     private let tryView = NSTextView()
     private let micRow: CheckRow, axRow: CheckRow, inputRow: CheckRow, fnRow: CheckRow
@@ -248,6 +250,11 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         for f in [dgField, llmField] {
             f.delegate = self; f.bezelStyle = .roundedBezel; f.focusRingType = .none
         }
+        nameField.delegate = self; nameField.bezelStyle = .roundedBezel; nameField.focusRingType = .none
+        nameField.alignment = .center
+        nameField.placeholderString = "Your name or nickname"
+        nameField.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        nameRow.setViews([nameField], in: .center)
         dgField.placeholderString = "Paste your Deepgram key"
         llmField.placeholderString = "Paste your Groq key"
 
@@ -264,6 +271,7 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
     }
 
     func show(step n: Int = 0) {
+        nameField.stringValue = Profile.name
         dgField.stringValue = Cloud.deepgramKey
         llmField.stringValue = Cloud.llmBaseURL == Onboarding.groqBase ? Cloud.llmKey : ""
         go(n)
@@ -307,7 +315,8 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
             art.kind = .welcome
             titleLabel.stringValue = "Welcome to MyType"
             bodyLabel.stringValue = "Hold the Fn key, say what you want to write, and let go. Your words are typed wherever your cursor is, in any app. Setup takes about three minutes."
-            views = [steps(["Add your Deepgram key (turns speech into text)", "Add your Groq key (tidies the text, optional)",
+            views = [makeLabel("What should MyType call you?", size: 13, weight: .medium), nameRow,
+                     steps(["Add your Deepgram key (turns speech into text)", "Add your Groq key (tidies the text, optional)",
                             "Allow three macOS permissions", "Set up the Fn key and try it"]),
                      makeLabel("Privacy: audio goes to Deepgram and text to Groq, using your own keys. Nothing passes through anyone else, and MyType keeps no copy of your voice.",
                                size: 11, color: .secondaryLabelColor, wrap: true)]
@@ -441,6 +450,7 @@ final class Onboarding: NSObject, NSTextFieldDelegate, NSWindowDelegate {
         case 1: saveAndAdvance(deepgram: true)
         case 2: saveAndAdvance(deepgram: false)
         case 5: window.close()
+        case 0: Profile.name = nameField.stringValue; go(1)
         default: go(step + 1)
         }
     }

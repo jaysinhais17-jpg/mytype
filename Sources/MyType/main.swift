@@ -71,6 +71,7 @@ final class App: NSObject, NSApplicationDelegate {
             _ = self.hotkey.install()
         }
 
+        AppearanceMode.current.apply()
         window = MainWindow(app: self)
         onboarding = Onboarding(app: self, main: window)
         window.onSetup = { [weak self] in self?.onboarding.show() }

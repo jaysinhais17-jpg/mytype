@@ -309,6 +309,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let chartTotal = makeLabel("", size: 12, color: .secondaryLabelColor)
     private let moneyValue = makeLabel("$0", size: 34), moneyNote = makeLabel("", size: 12, color: .secondaryLabelColor, wrap: true)
     private let planField = NSTextField()
+    private let nameField = NSTextField()
+    private var greetingTitle: NSTextField?
     private let typeView = NSTextView(), typePassage = NSTextField(wrappingLabelWithString: "")
     private let typeLive = makeLabel("", size: 12, color: .secondaryLabelColor), typeBest = makeLabel("", size: 12, color: .secondaryLabelColor)
     private var typeStart: Date?, typeDone = false, passageIndex = Int.random(in: 0..<3)
@@ -329,6 +331,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let llmURLField = NSTextField(), llmModelField = NSTextField()
     private let presetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let stylePopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    private let appearancePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let statusLabel = makeLabel("", size: 11, weight: .medium)
     private let engineLabel = makeLabel("", size: 11, color: .secondaryLabelColor)
     private let statusDot = makeLabel("●", size: 10, color: .systemOrange)
@@ -684,8 +687,10 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         buttons.setViews([talk, copy], in: .center)
         let tryCard = card([centered(makeLabel("Try it here without leaving MyType.", size: 12, color: .secondaryLabelColor)), tryBox, buttons], spacing: 10)
 
-        let first = NSFullUserName().split(separator: " ").first.map(String.init) ?? ""
-        return page([pageHeader(first.isEmpty ? "Welcome back" : "Welcome back, ", "Speak anywhere. Your words appear at the cursor.", grey: first), setupBanner, costSummary(homeTiles), stats, mid, typeCard, hero, tryCard])
+        let first = Profile.name
+        let header = pageHeader(first.isEmpty ? "Welcome back" : "Welcome back, ", "Speak anywhere. Your words appear at the cursor.", grey: first)
+        greetingTitle = header.arrangedSubviews.first as? NSTextField
+        return page([header, setupBanner, costSummary(homeTiles), stats, mid, typeCard, hero, tryCard])
     }
 
     private func buildHistory() -> NSView {
@@ -912,8 +917,14 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         stylePopup.addItems(withTitles: WritingStyle.allCases.map(\.title))
         stylePopup.selectItem(at: WritingStyle.allCases.firstIndex(of: WritingStyle.current) ?? 0)
         stylePopup.target = self; stylePopup.action = #selector(pickStyle)
+        appearancePopup.addItems(withTitles: AppearanceMode.allCases.map(\.title))
+        appearancePopup.selectItem(at: AppearanceMode.current.rawValue)
+        appearancePopup.target = self; appearancePopup.action = #selector(pickAppearance)
+        appearancePopup.widthAnchor.constraint(equalToConstant: 150).isActive = true
         stylePopup.widthAnchor.constraint(equalToConstant: 150).isActive = true
         let general = card([sectionTitle("General", symbol: "slider.horizontal.3")] + spaced([
+            settingRow("Appearance", "Match my Mac follows your system setting, including automatic light and dark by time of day.", appearancePopup),
+            settingRow("Your name", "What MyType calls you on the Home page. Any name or nickname works.", field(nameField, placeholder: Profile.systemFirstName, value: Profile.name, width: 200)),
             settingRow("Writing style", WritingStyle.allCases.map { "\($0.title): \($0.detail)" }.joined(separator: "\n"), stylePopup),
             settingRow("AI cleanup", "Smarter edits. Uses your cloud key if set, otherwise a local model (~2 GB RAM).", aiSwitch),
             settingRow("Auto-detect language", "Restart MyType to apply.", langSwitch),
@@ -938,13 +949,26 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         refresh()
     }
 
+    @objc private func pickAppearance() {
+        AppearanceMode.current = AppearanceMode.allCases[max(0, appearancePopup.indexOfSelectedItem)]
+    }
     @objc private func pickStyle() {
         WritingStyle.current = WritingStyle.allCases[max(0, stylePopup.indexOfSelectedItem)]
     }
 
     @objc private func runSetup() { onSetup?() }
 
+    /// Re-renders "Welcome back, <name>" after the name changes in setup or Settings.
+    func updateGreeting() {
+        guard let t = greetingTitle else { return }
+        let name = Profile.name
+        let a = NSMutableAttributedString(string: name.isEmpty ? "Welcome back" : "Welcome back, ", attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: NSColor.labelColor, .kern: -0.9])
+        if !name.isEmpty { a.append(NSAttributedString(string: name, attributes: [.font: serifFont(36, weight: .semibold), .foregroundColor: Theme.purple, .kern: -0.9])) }
+        t.attributedStringValue = a
+    }
+
     func show() {
+        updateGreeting()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
@@ -1086,6 +1110,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     func controlTextDidEndEditing(_ obj: Notification) {
+        if Profile.name != nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) { Profile.name = nameField.stringValue; updateGreeting() }
         Cloud.deepgramKey = dgField.stringValue
         Cloud.llmKey = llmKeyField.stringValue
         Cloud.llmBaseURL = llmURLField.stringValue

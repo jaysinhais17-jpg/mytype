@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 enum Config {
     static let supportDir = FileManager.default
@@ -36,5 +36,32 @@ enum Config {
     static var snippets: String {
         get { UserDefaults.standard.string(forKey: "snippets") ?? "" }
         set { UserDefaults.standard.set(newValue, forKey: "snippets") }
+    }
+}
+
+
+/// What MyType calls the user in greetings. Free text (a nickname is fine); defaults to the macOS first name.
+enum Profile {
+    static var systemFirstName: String { NSFullUserName().split(separator: " ").first.map(String.init) ?? "" }
+    static var name: String {
+        get { (UserDefaults.standard.string(forKey: "callName") ?? systemFirstName).trimmingCharacters(in: .whitespacesAndNewlines) }
+        set { UserDefaults.standard.set(newValue.trimmingCharacters(in: .whitespacesAndNewlines), forKey: "callName") }
+    }
+}
+
+/// Light / Dark / follow the Mac. "System" leaves NSApp.appearance nil, so macOS Auto (day/night) switching carries through.
+enum AppearanceMode: Int, CaseIterable {
+    case system, light, dark
+    var title: String { ["Match my Mac", "Light", "Dark"][rawValue] }
+    static var current: AppearanceMode {
+        get { AppearanceMode(rawValue: UserDefaults.standard.integer(forKey: "appearanceMode")) ?? .system }
+        set { UserDefaults.standard.set(newValue.rawValue, forKey: "appearanceMode"); newValue.apply() }
+    }
+    func apply() {
+        switch self {
+        case .system: NSApp.appearance = nil
+        case .light: NSApp.appearance = NSAppearance(named: .aqua)
+        case .dark: NSApp.appearance = NSAppearance(named: .darkAqua)
+        }
     }
 }
