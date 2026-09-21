@@ -528,7 +528,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let micRow: CheckRow, axRow: CheckRow, inputRow: CheckRow, keyRow: CheckRow
     private let tryView = NSTextView()
     private let historyStack = NSStackView()
-    private let statWords = makeLabel("0", size: 28), statSpeak = makeLabel("–", size: 28), statType = makeLabel("–", size: 28), statSaved = makeLabel("0 min", size: 28)
+    private let statWords = makeLabel("0", size: 28), statSpeak = makeLabel("–", size: 28), statType = makeLabel("–", size: 28), statSaved = makeLabel("0 min", size: 28), statSpoken = makeLabel("0 min", size: 28)
     private let statTypeCap = makeLabel("Typing WPM", size: 12, color: .secondaryLabelColor)
     private let chart = BarChart()
     private let chartTotal = makeLabel("", size: 12, color: .secondaryLabelColor)
@@ -541,6 +541,10 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private let typeView = NSTextView(), typePassage = NSTextField(wrappingLabelWithString: "")
     private let typeLive = makeLabel("", size: 12, color: .secondaryLabelColor), typeBest = makeLabel("", size: 12, color: .secondaryLabelColor)
     private var typeStart: Date?, typeDone = false, passageIndex = Int.random(in: 0..<3)
+    private let speakPassage = NSTextField(wrappingLabelWithString: ""), speakLive = makeLabel("", size: 12, color: .secondaryLabelColor)
+    private let speakBest = makeLabel("", size: 12, color: .secondaryLabelColor), speakCompare = makeLabel("", size: 13, weight: .semibold, color: Theme.purple)
+    /// True while the speaking test's button is held: the app hands that dictation to `speakResult` instead of typing it.
+    var speakTesting = false
     private static let passages = [
         "The patient presented with acute pain in the right lower quadrant, a mild fever and a raised white cell count. After examination, the surgeon decided to proceed with an appendicectomy that same evening.",
         "Good notes are short, specific and easy to scan. Write the finding, the reason and the next step, then move on. Clear writing saves time for everyone who has to read it after you.",
@@ -832,6 +836,27 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         centered(typeTitle); centered(typeBest); centered(typePassage); centered(typeLive)
         let againRow = NSStackView(); againRow.setViews([again], in: .center)
         let typeCard = card([typeTitle, typeBest, typePassage, typeBox, typeLive, againRow], spacing: 12)
+
+        // ---- speaking speed test: read the same passage aloud
+        speakPassage.maximumNumberOfLines = 0
+        speakPassage.font = .systemFont(ofSize: 14)
+        speakLive.maximumNumberOfLines = 0
+        let read = HoldButton(title: "Hold and read aloud")
+        read.onDown = { [weak self] in
+            guard let self else { return }
+            self.speakTesting = true
+            self.speakLive.stringValue = "Listening… read the passage, then let go."
+            self.app.beginManual()
+        }
+        read.onUp = { [weak self] in
+            guard let self else { return }
+            if self.speakTesting { self.speakLive.stringValue = "Working…" }
+            self.app.finishManual()
+        }
+        let speakTitle = makeLabel("Speaking speed", size: 15, weight: .semibold)
+        centered(speakTitle); centered(speakBest); centered(speakPassage); centered(speakLive); centered(speakCompare)
+        let readRow = NSStackView(); readRow.setViews([read], in: .center)
+        let speakCard = card([speakTitle, speakBest, speakPassage, readRow, speakLive, speakCompare], spacing: 12)
         loadPassage()
 
         // ---- stats
@@ -843,7 +868,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         }
         func cap(_ s: String) -> NSTextField { makeLabel(s, size: 12, color: .secondaryLabelColor) }
         let stats = NSStackView(views: [stat(statWords, cap("Words spoken")), stat(statSpeak, cap("Speaking WPM")),
-                                        stat(statType, statTypeCap), stat(statSaved, cap("Time saved"))])
+                                        stat(statType, statTypeCap), stat(statSpoken, cap("Time speaking")), stat(statSaved, cap("Time saved"))])
         stats.distribution = .fillEqually; stats.spacing = 12
 
         // ---- time saved chart + money saved
@@ -916,7 +941,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let first = Profile.name
         let header = pageHeader(first.isEmpty ? "Welcome back" : "Welcome back, ", "Speak anywhere. Your words appear at the cursor.", grey: first)
         greetingTitle = header.arrangedSubviews.first as? NSTextField
-        return page([header, setupBanner, costSummary(homeTiles), stats, mid, typeCard, hero, tryCard])
+        return page([header, setupBanner, costSummary(homeTiles), stats, mid, typeCard, speakCard, hero, tryCard])
     }
 
     private func buildHistory() -> NSView {
@@ -938,6 +963,35 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         typeView.isEditable = true
         typeView.string = ""
         updateTyping()
+        speakPassage.stringValue = MainWindow.passages[passageIndex]
+        speakLive.stringValue = "Hold the button, read the passage aloud at your normal pace, then let go."
+    }
+
+    // MARK: speaking test
+
+    private static func testWords(_ s: String) -> [String] {
+        s.lowercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+    }
+
+    /// A speaking-test dictation came back. `secs` is how long the button was held.
+    func speakResult(_ text: String, secs: Double) {
+        let target = MainWindow.testWords(MainWindow.passages[passageIndex]), said = MainWindow.testWords(text)
+        guard !said.isEmpty, secs > 0 else { speakLive.stringValue = "Didn't catch that. Hold the button and read the passage aloud."; return }
+        // How much of the passage was heard: each passage word counts once per time it was said.
+        var pool: [String: Int] = [:]
+        for w in said { pool[w, default: 0] += 1 }
+        var hit = 0
+        for w in target where (pool[w] ?? 0) > 0 { pool[w]! -= 1; hit += 1 }
+        let acc = Int((Double(hit) / Double(target.count) * 100).rounded())
+        let wpm = Double(said.count) / (secs / 60)
+        if acc >= 80 && secs > 3 {
+            Stats.speakingTestWPM = wpm
+            if wpm > (Stats.speakingTestBest ?? 0) { Stats.speakingTestBest = wpm }
+            speakLive.stringValue = String(format: "Done: %.0f WPM, %d%% of the passage heard, in %.0fs.", wpm, acc, secs)
+        } else {
+            speakLive.stringValue = "Only \(acc)% of the passage was heard. Read the whole passage and try again for a fair result."
+        }
+        reloadStats()
     }
     @objc private func newPassage() {
         passageIndex = (passageIndex + 1) % MainWindow.passages.count
@@ -1317,12 +1371,22 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     private func reloadStats() {
         let nf = NumberFormatter(); nf.numberStyle = .decimal
         statWords.stringValue = nf.string(from: NSNumber(value: Stats.totalWords)) ?? "0"
-        statSpeak.stringValue = Stats.speakingWPM.map { String(Int($0.rounded())) } ?? "–"
+        statSpeak.stringValue = Stats.speakingShown.map { String(Int($0.rounded())) } ?? "–"
         statType.stringValue = Stats.typingWPM.map { String(Int($0.rounded())) } ?? "–"
         statTypeCap.stringValue = Stats.typingWPM == nil ? "Typing WPM (take the test)" : "Typing WPM"
         statSaved.stringValue = Stats.duration(Stats.totalSavedSeconds)
+        statSpoken.stringValue = Stats.duration(Stats.totalSpokenSeconds)
         typeBest.stringValue = Stats.typingBest.map { "Best: \(Int($0.rounded())) WPM" } ?? ""
         typeBest.isHidden = typeBest.stringValue.isEmpty
+        speakBest.stringValue = Stats.speakingTestBest.map { "Best: \(Int($0.rounded())) WPM" } ?? ""
+        speakBest.isHidden = speakBest.stringValue.isEmpty
+        if let s = Stats.speakingTestWPM, let t = Stats.typingWPM, t > 0 {
+            speakCompare.stringValue = s >= t
+                ? String(format: "You speak %.1f× faster than you type: %.0f vs %.0f WPM.", s / t, s, t)
+                : String(format: "You type faster than you speak: %.0f vs %.0f WPM.", t, s)
+        } else if Stats.speakingTestWPM != nil { speakCompare.stringValue = "Take the typing test above to compare the two." }
+        else { speakCompare.stringValue = "" }
+        speakCompare.isHidden = speakCompare.stringValue.isEmpty
 
         let daily = Stats.dailySaved(14)
         let f = DateFormatter(); f.dateFormat = "d MMM"

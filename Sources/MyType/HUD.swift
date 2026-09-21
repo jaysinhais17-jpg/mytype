@@ -33,7 +33,12 @@ final class HUD {
             return
         }
         position()
-        panel.alphaValue = 1
+        // Through the animator with zero duration: a plain `alphaValue = 1` loses to a fade-out still in flight,
+        // leaving the panel in front but invisible.
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0
+            panel.animator().alphaValue = 1
+        }
         panel.orderFrontRegardless()
     }
 

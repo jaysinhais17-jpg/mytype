@@ -3,9 +3,11 @@ import CoreGraphics
 
 /// Fn (Globe) and Right Option press/release events via a listen-only CGEventTap. Needs Input Monitoring permission.
 final class Hotkey {
-    var onDown: ((Int64) -> Void)?
+    /// The Date is when the key actually moved. Handlers run later on the main queue, which can be busy for a few
+    /// hundred ms starting the mic, so timing a tap from inside them misreads quick taps as holds.
+    var onDown: ((Int64, Date) -> Void)?
     /// Second argument: another key was pressed while this one was held (a shortcut like Option+E, not a dictation press).
-    var onUp: ((Int64, Bool) -> Void)?
+    var onUp: ((Int64, Bool, Date) -> Void)?
     var onEvent: ((Int64, Bool) -> Void)?
     private var tap: CFMachPort?
     private var down: Set<Int64> = []
@@ -32,15 +34,16 @@ final class Hotkey {
             case 61: pressed = event.flags.contains(.maskAlternate)     // Right Option
             default: return Unmanaged.passUnretained(event)
             }
+            let at = Date()
             DispatchQueue.main.async { me.onEvent?(code, pressed) }
             if pressed && !me.down.contains(code) {
                 if me.down.isEmpty { me.chorded = false }
                 me.down.insert(code)
-                DispatchQueue.main.async { me.onDown?(code) }
+                DispatchQueue.main.async { me.onDown?(code, at) }
             } else if !pressed && me.down.contains(code) {
                 me.down.remove(code)
                 let c = me.chorded
-                DispatchQueue.main.async { me.onUp?(code, c) }
+                DispatchQueue.main.async { me.onUp?(code, c, at) }
             }
             return Unmanaged.passUnretained(event)
         }

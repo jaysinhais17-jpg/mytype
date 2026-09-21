@@ -87,9 +87,15 @@ final class DeepgramSession {
         }
     }
 
+    /// Quietest 0.4 s seen after a final arrived (debug log only): shows whether the room ever gets under pauseRMS.
+    private(set) var quietest: Float = 1
+
     private func pump() {
         sendNew(recorder.snapshot(from: sent))
-        guard dirty, let onPause, Audio.rms(recorder.tail(Int(Config.sampleRate * 0.4))) < Config.pauseRMS else { return }
+        guard dirty, let onPause else { return }
+        let tail = Audio.rms(recorder.tail(Int(Config.sampleRate * 0.4)))
+        quietest = min(quietest, tail)
+        guard tail < Config.pauseRMS else { return }
         dirty = false
         onPause(finals.joined(separator: " "))
     }

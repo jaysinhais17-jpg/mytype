@@ -53,6 +53,19 @@ enum Stats {
         get { UserDefaults.standard.object(forKey: "typingBest") as? Double }
         set { UserDefaults.standard.set(newValue, forKey: "typingBest") }
     }
+    /// Speaking speed from the read-aloud test (the Home stat is the average over real dictations instead).
+    static var speakingTestWPM: Double? {
+        get { UserDefaults.standard.object(forKey: "speakingTestWPM") as? Double }
+        set { UserDefaults.standard.set(newValue, forKey: "speakingTestWPM") }
+    }
+    static var speakingTestBest: Double? {
+        get { UserDefaults.standard.object(forKey: "speakingTestBest") as? Double }
+        set { UserDefaults.standard.set(newValue, forKey: "speakingTestBest") }
+    }
+    /// Speaking pace for the Home tile and for words with no recorded length: the read-aloud test if taken,
+    /// else the average over real dictations, else a typical pace.
+    static var speakingShown: Double? { speakingTestWPM ?? speakingWPM }
+    static var speakingForMath: Double { speakingShown ?? assumedSpeakingWPM }
     /// What time saved is measured against: your measured typing speed, or an average until you take the test.
     static var typingForMath: Double { typingWPM ?? defaultTypingWPM }
 
@@ -61,7 +74,7 @@ enum Stats {
     /// Seconds saved by speaking `s` instead of typing it.
     static func savedSeconds(_ s: DayStat) -> Double {
         let untimed = Double(s.words - s.timedWords)
-        let spoken = s.secs + untimed / assumedSpeakingWPM * 60
+        let spoken = s.secs + untimed / speakingForMath * 60
         return max(0, Double(s.words) / typingForMath * 60 - spoken)
     }
 
@@ -75,6 +88,13 @@ enum Stats {
         let older = totalWords - tracked
         if older > 0 { t += savedSeconds(DayStat(words: older)) }
         return t
+    }
+
+    /// Lifetime seconds spent speaking: recorded audio, plus an estimate for words with no recorded length.
+    static var totalSpokenSeconds: Double {
+        let m = days
+        let timed = m.values.reduce(0) { $0 + $1.timedWords }
+        return m.values.reduce(0) { $0 + $1.secs } + Double(max(0, totalWords - timed)) / speakingForMath * 60
     }
 
     /// Average speaking speed over dictations with a recorded length.

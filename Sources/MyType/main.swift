@@ -23,6 +23,7 @@ final class App: NSObject, NSApplicationDelegate {
     private var pressStart = Date()
     private var lastTapUp = Date.distantPast
     private var hudWork: DispatchWorkItem?
+    private var session = 0 // counts dictations, so a finished one can tell whether a newer one now owns the HUD
     /// Cloud cleanup started at the last pause, while the key was still down. Used if the final transcript matches its input.
     private var headStart: (input: String, task: Task<String, Never>)?
     private let statusLine = NSMenuItem(title: "Loading model…", action: nil, keyEquivalent: "")
@@ -64,8 +65,8 @@ final class App: NSObject, NSApplicationDelegate {
 
         _ = Net.online // start watching the connection
         recorder.onLevel = { [weak self] v in self?.hud.level(v) }
-        hotkey.onDown = { [weak self] code in self?.keyDown(code) }
-        hotkey.onUp = { [weak self] code, chorded in self?.keyUp(code, chorded: chorded) }
+        hotkey.onDown = { [weak self] code, at in self?.keyDown(code, at: at) }
+        hotkey.onUp = { [weak self] code, chorded, at in self?.keyUp(code, chorded: chorded, at: at) }
         hotkey.onEvent = { [weak self] _, _ in self?.keySeen = true }
         // Keep trying until Input Monitoring is granted — no relaunch needed.
         _ = hotkey.install()
@@ -257,28 +258,28 @@ final class App: NSObject, NSApplicationDelegate {
 
     /// Each key follows its Shortcuts mode (Settings): hold = push-to-talk; hands-free opens with a single tap or a double-tap,
     /// then one more tap stops it. Defaults: Fn double-tap, Right Option single tap (macOS grabs a double-tap of Option).
-    private func keyDown(_ code: Int64) {
+    private func keyDown(_ code: Int64, at: Date) {
         if recording && locked { locked = false; finish(); return }
         guard !recording else { return }
         let m = mode(code)
         if m == .off { return }
-        pressStart = Date()
+        pressStart = at
         if m == .holdDoubleTap {
-            let isDouble = Date().timeIntervalSince(lastTapUp) < Config.doubleTapSeconds
+            let isDouble = at.timeIntervalSince(lastTapUp) < Config.doubleTapSeconds
             begin(showAfter: isDouble ? 0 : Config.tapSeconds)
             if isDouble && recording { locked = true }
         } else { begin(showAfter: Config.tapSeconds) }
     }
 
-    private func keyUp(_ code: Int64, chorded: Bool) {
+    private func keyUp(_ code: Int64, chorded: Bool, at: Date) {
         guard recording, !locked else { return }
         let m = mode(code)
         if m == .off { return }
         if code == Self.rightOption && chorded { cancelRecording(); return }   // Option+key shortcut, not dictation
-        if Date().timeIntervalSince(pressStart) < Config.tapSeconds {
+        if at.timeIntervalSince(pressStart) < Config.tapSeconds {
             switch m {
             case .holdTap: lockHandsFree()
-            case .holdDoubleTap: cancelRecording(); lastTapUp = Date()
+            case .holdDoubleTap: cancelRecording(); lastTapUp = at
             default: cancelRecording()
             }
         } else { finish() }
@@ -317,6 +318,7 @@ final class App: NSObject, NSApplicationDelegate {
         do {
             try recorder.start()
             recording = true
+            session += 1
             chip.dismiss()
             startApp = NSWorkspace.shared.frontmostApplication?.processIdentifier
             Focus.prime(NSWorkspace.shared.frontmostApplication)
@@ -351,6 +353,7 @@ final class App: NSObject, NSApplicationDelegate {
         headStart?.task.cancel()
         let p = cloudPolisher
         headStart = (cleaned, Task { await p.polish(cleaned) })
+        if Log.debug { Log.write("  head start fired · \(cleaned.split(separator: " ").count) words") }
     }
 
     private func dropHeadStart() { headStart?.task.cancel(); headStart = nil }
@@ -370,10 +373,13 @@ final class App: NSObject, NSApplicationDelegate {
         hudWork?.cancel(); hudWork = nil
         recording = false
         locked = false
+        let speakTest = window.speakTesting; window.speakTesting = false
         let samples = recorder.stop()
         let secs = Double(samples.count) / Config.sampleRate
         guard secs >= Config.minSeconds, Audio.rms(samples) > Config.silenceRMS else {
-            dropHeadStart(); streamer.cancel(); streamingLocal = false; deepgram?.cancel(); deepgram = nil; setIcon("mic"); hud.set(.hidden); return
+            dropHeadStart(); streamer.cancel(); streamingLocal = false; deepgram?.cancel(); deepgram = nil; setIcon("mic"); hud.set(.hidden)
+            if speakTest { window.speakResult("", secs: 0) }
+            return
         }
         setIcon("ellipsis.circle")
         hud.set(.working)
@@ -381,12 +387,18 @@ final class App: NSObject, NSApplicationDelegate {
         let began = startApp
         let beganFocus = startFocus
         let dg = deepgram; deepgram = nil
+        let session = session
         dg?.onPause = nil
         let ahead = headStart; headStart = nil
         let streamed = streamingLocal; streamingLocal = false
         let t0 = Date()
         Task {
-            defer { DispatchQueue.main.async { self.setIcon("mic"); self.hud.set(.hidden) } }
+            // A new dictation may have started while this one was still being transcribed: the mic on screen is then
+            // the new one's, so leave it (and the menu-bar icon) alone. Its own finish hides it.
+            defer { DispatchQueue.main.async { if self.session == session { self.setIcon("mic"); self.hud.set(.hidden) } } }
+            // Speaking speed test: the words go to the test card (even when nothing was heard), never to the cursor or History.
+            var spoken = ""
+            defer { if speakTest { let t = spoken; DispatchQueue.main.async { self.window.speakResult(t, secs: secs) } } }
             var usedAhead = false
             defer { if !usedAhead { ahead?.task.cancel() } }
             let raw: String
@@ -409,6 +421,9 @@ final class App: NSObject, NSApplicationDelegate {
             guard !cleaned.isEmpty else { return }
             if useAI {
                 if Cloud.useLLM {
+                    if Log.debug, ahead?.input != cleaned {
+                        Log.write("  head start missed · \(ahead.map { "had \($0.input.count) chars, final \(cleaned.count), final ends: …\(cleaned.suffix(40))" } ?? "never fired") · quietest tail \(dg?.quietest ?? -1)")
+                    }
                     if let ahead, ahead.input == cleaned { usedAhead = true; cleaned = await ahead.task.value }
                     else if Net.online { cleaned = await cloudPolisher.polish(cleaned) }
                 }
@@ -420,6 +435,7 @@ final class App: NSObject, NSApplicationDelegate {
                              t1.timeIntervalSince(t0), engine,
                              t2.timeIntervalSince(t1), useAI ? (Cloud.useLLM ? (usedAhead ? "cloud, head start" : Net.online ? "cloud" : "skipped, offline") : "local") : "off",
                              t2.timeIntervalSince(t0), secs))
+            if speakTest { spoken = text; return }
             await MainActor.run {
                 // Inside our own window, type straight into the "Try it" box. Otherwise the text goes to the cursor only
                 // if a text box had it when you started talking and it's still there. If you started with nothing
@@ -443,6 +459,7 @@ final class App: NSObject, NSApplicationDelegate {
 }
 
 enum Log {
+    static let debug = ProcessInfo.processInfo.environment["MYTYPE_DEBUG"] != nil || UserDefaults.standard.bool(forKey: "debugLog")
     static let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/MyType.log")
     static func write(_ line: String) {
         let s = "\(Date()) \(line)\n"
