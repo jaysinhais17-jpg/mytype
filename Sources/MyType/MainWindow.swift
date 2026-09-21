@@ -868,12 +868,14 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         }
         func cap(_ s: String) -> NSTextField { makeLabel(s, size: 12, color: .secondaryLabelColor) }
         let stats = NSStackView(views: [stat(statWords, cap("Words spoken")), stat(statSpeak, cap("Speaking WPM")),
-                                        stat(statType, statTypeCap), stat(statSpoken, cap("Time speaking")), stat(statSaved, cap("Time saved"))])
+                                        stat(statType, statTypeCap), stat(statSpoken, cap("Time speaking"))])
         stats.distribution = .fillEqually; stats.spacing = 12
 
         // ---- time saved chart + money saved
-        centered(chartTotal)
-        let chartCard = card([centered(makeLabel("Time saved", size: 15, weight: .semibold)), chartTotal, chart], spacing: 8)
+        // The lifetime total heads its own card, the same way the rand figure heads "Money saved" beside it.
+        statSaved.font = serifFont(34); statSaved.textColor = Theme.purple
+        centered(statSaved); centered(chartTotal)
+        let chartCard = card([centered(makeLabel("Time saved", size: 15, weight: .semibold)), statSaved, chartTotal, chart], spacing: 8)
 
         planField.stringValue = String(format: "%g", Stats.planPriceUSD)
         planField.delegate = self
@@ -882,9 +884,12 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let priceRow = NSStackView(); priceRow.spacing = 8; priceRow.alignment = .centerY
         priceRow.setViews([makeLabel("Compared with a subscription at US$ per month", size: 12, color: .secondaryLabelColor), planBox], in: .center)
         centered(moneyValue); centered(moneyNote)
-        let moneyCard = card([centered(makeLabel("Money saved", size: 15, weight: .semibold)), moneyValue, moneyNote, priceRow], spacing: 8)
+        // Takes up the height the chart adds next door, so the heading and figure line up across both cards
+        // and the price row sits on the bottom edge like the chart's date labels.
+        let moneyGap = NSView(); moneyGap.setContentHuggingPriority(.init(1), for: .vertical)
+        let moneyCard = card([centered(makeLabel("Money saved", size: 15, weight: .semibold)), moneyValue, moneyNote, moneyGap, priceRow], spacing: 8)
         let mid = NSStackView(views: [chartCard, moneyCard]); mid.spacing = 12; mid.alignment = .top; mid.distribution = .fill
-        chartCard.widthAnchor.constraint(equalTo: moneyCard.widthAnchor, multiplier: 1.6).isActive = true
+        chartCard.widthAnchor.constraint(equalTo: moneyCard.widthAnchor).isActive = true
         chartCard.heightAnchor.constraint(equalTo: moneyCard.heightAnchor).isActive = true
 
         // ---- how to dictate + try it
