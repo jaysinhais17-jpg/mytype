@@ -67,6 +67,7 @@ final class App: NSObject, NSApplicationDelegate {
         recorder.onLevel = { [weak self] v in self?.hud.level(v) }
         hotkey.onDown = { [weak self] code, at in self?.keyDown(code, at: at) }
         hotkey.onUp = { [weak self] code, chorded, at in self?.keyUp(code, chorded: chorded, at: at) }
+        hotkey.onEscape = { [weak self] in self?.escape() }
         hotkey.onEvent = { [weak self] _, _ in self?.keySeen = true }
         // Keep trying until Input Monitoring is granted — no relaunch needed.
         _ = hotkey.install()
@@ -291,6 +292,15 @@ final class App: NSObject, NSApplicationDelegate {
         hudWork?.cancel(); hudWork = nil
         hud.set(.listening)
         NSSound(named: "Tink")?.play()
+    }
+
+    /// Esc while dictating throws the take away: nothing is typed, the mic closes at once.
+    private func escape() {
+        if Log.debug { Log.write("  esc · recording \(recording)") }
+        guard recording else { return }
+        cancelRecording()
+        if window.speakTesting { window.speakTesting = false; window.speakCancelled() }
+        NSSound(named: "Pop")?.play()
     }
 
     func beginManual() { if !recording { begin(showAfter: 0) } }

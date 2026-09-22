@@ -979,6 +979,8 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
     }
 
     /// A speaking-test dictation came back. `secs` is how long the button was held.
+    func speakCancelled() { speakLive.stringValue = "Cancelled. Hold the button and read the passage aloud to try again." }
+
     func speakResult(_ text: String, secs: Double) {
         let target = MainWindow.testWords(MainWindow.passages[passageIndex]), said = MainWindow.testWords(text)
         guard !said.isEmpty, secs > 0 else { speakLive.stringValue = "Didn't catch that. Hold the button and read the passage aloud."; return }
@@ -1226,7 +1228,7 @@ final class MainWindow: NSObject, NSTextFieldDelegate, NSTextViewDelegate {
         let shortcuts = card([sectionTitle("Shortcuts", symbol: "keyboard")] + spaced([
             settingRow("Fn key", "Set “Press fn key to” to Do Nothing in System Settings › Keyboard so macOS leaves it alone.", fnPopup),
             settingRow("Right Option key", "A single tap avoids the double-tap that macOS and other apps often claim. Pressing Option with another key never dictates.", optionPopup),
-        ]) + [centered(makeLabel("Hands-free keeps listening until you tap the key once more.", size: 11, color: .secondaryLabelColor, wrap: true))], spacing: 16)
+        ]) + [centered(makeLabel("Hands-free keeps listening until you tap the key once more. Esc while dictating cancels and types nothing.", size: 11, color: .secondaryLabelColor, wrap: true))], spacing: 16)
         let setupBtn = PillButton(title: "Open setup guide", primary: false)
         setupBtn.target = self; setupBtn.action = #selector(runSetup)
         let setupRow = NSStackView(); setupRow.setViews([setupBtn], in: .center)

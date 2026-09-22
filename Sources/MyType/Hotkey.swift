@@ -9,6 +9,8 @@ final class Hotkey {
     /// Second argument: another key was pressed while this one was held (a shortcut like Option+E, not a dictation press).
     var onUp: ((Int64, Bool, Date) -> Void)?
     var onEvent: ((Int64, Bool) -> Void)?
+    /// Esc was pressed (keycode 53) while nothing else is held. The tap only listens, so the key still reaches the front app.
+    var onEscape: (() -> Void)?
     private var tap: CFMachPort?
     private var down: Set<Int64> = []
     private var chorded = false
@@ -24,7 +26,9 @@ final class Hotkey {
                 return Unmanaged.passUnretained(event)
             }
             if type == .keyDown {
-                if !me.down.isEmpty { me.chorded = true }
+                if event.getIntegerValueField(.keyboardEventKeycode) == 53, !event.flags.contains(.maskCommand) {
+                    DispatchQueue.main.async { me.onEscape?() }
+                } else if !me.down.isEmpty { me.chorded = true }
                 return Unmanaged.passUnretained(event)
             }
             let code = event.getIntegerValueField(.keyboardEventKeycode)
