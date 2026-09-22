@@ -4,12 +4,17 @@ import AppKit
 final class HUD {
     enum Mode { case hidden, listening, working }
 
-    private let panel: NSPanel
+    private var panel: NSPanel
     private let view = HUDView(frame: NSRect(x: 0, y: 0, width: 150, height: 150))
+    private var showID = 0
 
     init() {
-        panel = NSPanel(contentRect: view.frame, styleMask: [.borderless, .nonactivatingPanel],
-                        backing: .buffered, defer: false)
+        panel = HUD.makePanel(view)
+    }
+
+    private static func makePanel(_ view: NSView) -> NSPanel {
+        let panel = NSPanel(contentRect: view.frame, styleMask: [.borderless, .nonactivatingPanel],
+                            backing: .buffered, defer: false)
         panel.level = .statusBar
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -18,12 +23,31 @@ final class HUD {
         panel.hidesOnDeactivate = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary, .ignoresCycle]
         panel.contentView = view
+        return panel
+    }
+
+    /// A long-lived panel can silently fall off the "all Spaces" list (seen after hours of running: it is ordered front,
+    /// visible and at full alpha, yet the window server no longer shows it on the current desktop). A fresh window is
+    /// tagged correctly again, so when that happens the panel is thrown away and rebuilt around the same view.
+    private func rebuildPanel(_ why: String) {
+        if Log.debug { Log.write("  hud rebuild · \(why)") }
+        let old = panel
+        old.orderOut(nil)
+        old.contentView = nil
+        panel = HUD.makePanel(view)
+    }
+
+    /// True when the window server has the panel on screen right now.
+    private var listedOnScreen: Bool {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        return list.contains { ($0[kCGWindowNumber as String] as? Int) == panel.windowNumber }
     }
 
     func set(_ mode: Mode) {
         if mode == .listening && view.mode == .hidden { view.restartIntro() }
         view.mode = mode
         if mode == .hidden {
+            if Log.debug { Log.write("  hud hide") }
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.15
                 panel.animator().alphaValue = 0
@@ -32,6 +56,23 @@ final class HUD {
             })
             return
         }
+        if !panel.isOnActiveSpace { rebuildPanel("not on the active Space before show") }
+        show()
+        showID += 1
+        let id = showID
+        // Check twice that it really landed on screen; if the window server disagrees, rebuild the panel and show again.
+        for (i, delay) in [0.25, 0.6].enumerated() {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.showID == id, self.view.mode != .hidden else { return }
+                if Log.debug { self.report("check \(i + 1)") }
+                if self.panel.isOnActiveSpace && self.listedOnScreen { return }
+                self.rebuildPanel("check \(i + 1): space \(self.panel.isOnActiveSpace) listed \(self.listedOnScreen)")
+                self.show()
+            }
+        }
+    }
+
+    private func show() {
         position()
         // Through the animator with zero duration: a plain `alphaValue = 1` loses to a fade-out still in flight,
         // leaving the panel in front but invisible.
@@ -40,6 +81,14 @@ final class HUD {
             panel.animator().alphaValue = 1
         }
         panel.orderFrontRegardless()
+        if Log.debug { report("show \(view.mode)") }
+    }
+
+    private func report(_ what: String) {
+        let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        let mine = list.first { ($0[kCGWindowNumber as String] as? Int) == panel.windowNumber }
+        Log.write("  hud server · listed \(mine != nil) layer \(mine?[kCGWindowLayer as String] ?? "-") alpha \(mine?[kCGWindowAlpha as String] ?? "-") appHidden \(NSApp.isHidden) appActive \(NSApp.isActive) level \(panel.level.rawValue) cb \(panel.collectionBehavior.rawValue) mask \(panel.styleMask.rawValue) num \(panel.windowNumber)")
+        Log.write("  hud \(what) · mode \(view.mode) vis \(panel.isVisible) alpha \(panel.alphaValue) onscreen \(panel.occlusionState.contains(.visible)) space \(panel.isOnActiveSpace) frame \(panel.frame) screen \(panel.screen?.frame ?? .zero) front \(NSWorkspace.shared.frontmostApplication?.localizedName ?? "?")")
     }
 
     func level(_ v: Float) { view.push(level: v) }
